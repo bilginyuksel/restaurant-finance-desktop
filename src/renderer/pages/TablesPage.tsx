@@ -34,10 +34,20 @@ export const TablesPage: React.FC = () => {
       'M';
     for (let i = 1; i <= count; i++) {
       const presetId = `preset_${groupId}_${i}`;
-      if (!activeTables.find((t) => t.id === presetId)) {
+      const slotName = `${prefix} ${i}`;
+      // Suppress the placeholder if the slot is currently occupied either:
+      //   1) by the original lazy-created doc with the preset ID, or
+      //   2) by a fresh table reusing the slot (same name + group) after the
+      //      previous one was closed.
+      const occupied = activeTables.some(
+        (t) =>
+          t.id === presetId ||
+          (t.name === slotName && (t.group ?? '') === groupId),
+      );
+      if (!occupied) {
         placeholders.push({
           id: presetId,
-          name: `${prefix} ${i}`,
+          name: slotName,
           group: groupId,
           status: 'active',
           createdAt: '',
@@ -91,6 +101,46 @@ export const TablesPage: React.FC = () => {
     setCreating(true);
   };
 
+  // Opening a table slot:
+  // - Real (non-preset) tables: navigate to existing doc.
+  // - Preset placeholder: if its deterministic ID isn't taken yet, use it
+  //   (lazy-create on first save). If it's taken by a closed table from a
+  //   previous customer, spin up a fresh table doc with the same name/group
+  //   so the slot can be reused for a new customer.
+  const openTable = async (t: Table) => {
+    if (!t.id.startsWith('preset_')) {
+      navigate(`/table/${t.id}`);
+      return;
+    }
+    const existing = tables.find((tb) => tb.id === t.id);
+    if (!existing) {
+      navigate(`/table/${t.id}`);
+      return;
+    }
+    if (existing.status !== 'closed') {
+      navigate(`/table/${t.id}`);
+      return;
+    }
+    // Slot was previously used and closed — create a new session for this slot.
+    const fresh: Table = {
+      id: newId(),
+      name: t.name,
+      ...(t.group ? { group: t.group } : {}),
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      orders: [],
+      totalPrice: 0,
+      transactions: [],
+    };
+    try {
+      await addTable(fresh);
+      navigate(`/table/${fresh.id}`);
+    } catch (err) {
+      console.error(err);
+      toastError('Masa oluşturulamadı');
+    }
+  };
+
   return (
     <>
       <div className="flex-row" style={{ marginBottom: 16, alignItems: 'center' }}>
@@ -111,10 +161,10 @@ export const TablesPage: React.FC = () => {
       ) : (
         <div className="tables-grid">
           {filteredTables.map((t) => (
-            <TableCard key={t.id} table={t} recipes={recipesById} onOpen={(tt) => navigate(`/table/${tt.id}`)} />
+            <TableCard key={t.id} table={t} recipes={recipesById} onOpen={openTable} />
           ))}
           {placeholders.map((t) => (
-            <TableCard key={t.id} table={t} recipes={recipesById} onOpen={(tt) => navigate(`/table/${tt.id}`)} />
+            <TableCard key={t.id} table={t} recipes={recipesById} onOpen={openTable} />
           ))}
         </div>
       )}

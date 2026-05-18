@@ -103,42 +103,21 @@ export const TablesPage: React.FC = () => {
 
   // Opening a table slot:
   // - Real (non-preset) tables: navigate to existing doc.
-  // - Preset placeholder: if its deterministic ID isn't taken yet, use it
-  //   (lazy-create on first save). If it's taken by a closed table from a
-  //   previous customer, spin up a fresh table doc with the same name/group
-  //   so the slot can be reused for a new customer.
-  const openTable = async (t: Table) => {
+  // - Preset placeholder: pre-generate a clean `t_<ts>_<rand>` ID and
+  //   navigate with the slot's identity in router state. The Firestore doc
+  //   is NOT created yet — TableDetailPage renders a synthetic empty table
+  //   from the draft state. The doc is materialised on the first save
+  //   (e.g. when the user sends an order to the kitchen). If the user
+  //   backs out without ordering, no orphan doc is left behind.
+  const openTable = (t: Table) => {
     if (!t.id.startsWith('preset_')) {
       navigate(`/table/${t.id}`);
       return;
     }
-    const existing = tables.find((tb) => tb.id === t.id);
-    if (!existing) {
-      navigate(`/table/${t.id}`);
-      return;
-    }
-    if (existing.status !== 'closed') {
-      navigate(`/table/${t.id}`);
-      return;
-    }
-    // Slot was previously used and closed — create a new session for this slot.
-    const fresh: Table = {
-      id: newId(),
-      name: t.name,
-      ...(t.group ? { group: t.group } : {}),
-      status: 'active',
-      createdAt: new Date().toISOString(),
-      orders: [],
-      totalPrice: 0,
-      transactions: [],
-    };
-    try {
-      await addTable(fresh);
-      navigate(`/table/${fresh.id}`);
-    } catch (err) {
-      console.error(err);
-      toastError('Masa oluşturulamadı');
-    }
+    const draftId = newId();
+    navigate(`/table/${draftId}`, {
+      state: { draft: { name: t.name, group: t.group ?? null } },
+    });
   };
 
   return (

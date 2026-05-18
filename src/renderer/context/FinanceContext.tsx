@@ -263,25 +263,40 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
 
   const addTable = async (table: Table) => {
     if (!restaurantId || !user) return;
-    await setDoc(doc(db, 'restaurants', restaurantId, 'tables', table.id), {
+    // IMPORTANT: do NOT await the Promise returned by setDoc. Firestore only
+    // resolves that promise after the *server* acknowledges the write, so
+    // while offline it stays pending forever and blocks the caller's await
+    // (which would freeze the UI on "Approve" / "Save" until connectivity
+    // returns). The local cache is updated synchronously inside setDoc, so
+    // onSnapshot fires immediately and the UI sees the change. The write is
+    // safely queued by the SDK and flushed on reconnect.
+    void setDoc(doc(db, 'restaurants', restaurantId, 'tables', table.id), {
       ...table,
       ...getAuditInfo(),
       orders: (table.orders || []).map((o) => ({ ...o, ...getAuditInfo() })),
-    });
+    }).catch((err) => console.error('[addTable] write failed', table.id, err));
   };
 
   const updateTable = async (table: Table) => {
     if (!restaurantId || !user) return;
-    // Serialize per-table writes: if a write for this table is already in
-    // flight, queue behind it so we never have two overlapping setDoc calls
-    // racing for the same document (e.g. accidental double-clicks on Save
-    // or Pay). Each caller's await resolves only after its own write lands.
+    // Serialize per-table writes so we never have two setDoc calls for the
+    // same doc kicked off in overlapping ticks (accidental double-clicks on
+    // Save or Pay). The queue advances as soon as setDoc has *staged* the
+    // write locally — we do not wait for server ack. See the note in
+    // addTable for why awaiting setDoc would break offline behaviour
+    // (the Approve button would hang until the network is back).
     const prev = inFlightWritesRef.current.get(table.id);
-    const run = async () => {
+    const run = (): Promise<void> => {
       const sanitized = Object.fromEntries(
         Object.entries(table).filter(([, v]) => v !== undefined),
       );
-      await setDoc(doc(db, 'restaurants', restaurantId, 'tables', table.id), sanitized);
+      // Fire-and-forget the network round-trip; only log async failures.
+      void setDoc(doc(db, 'restaurants', restaurantId, 'tables', table.id), sanitized)
+        .catch((err) => console.error('[updateTable] write failed', table.id, err));
+      // Resolve as soon as the write has been queued by the SDK. The local
+      // cache has already been updated synchronously inside setDoc, so the
+      // caller can safely proceed (clear basket, print kitchen ticket, etc.).
+      return Promise.resolve();
     };
     const next = (prev ?? Promise.resolve())
       .catch(() => {/* swallow prior errors so we still attempt this write */})
@@ -299,24 +314,28 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
 
   const deleteTable = async (id: string) => {
     if (!restaurantId || !user) return;
-    await deleteDoc(doc(db, 'restaurants', restaurantId, 'tables', id));
+    // Fire-and-forget: offline-safe (see addTable note).
+    void deleteDoc(doc(db, 'restaurants', restaurantId, 'tables', id))
+      .catch((err) => console.error('[deleteTable] write failed', id, err));
   };
 
   const addTableGroup = async (group: TableGroup) => {
     if (!restaurantId || !user) return;
-    await setDoc(doc(db, 'restaurants', restaurantId, 'tableGroups', group.id), group);
+    void setDoc(doc(db, 'restaurants', restaurantId, 'tableGroups', group.id), group)
+      .catch((err) => console.error('[addTableGroup] write failed', group.id, err));
   };
 
   const deleteTableGroup = async (id: string) => {
     if (!restaurantId || !user) return;
-    await deleteDoc(doc(db, 'restaurants', restaurantId, 'tableGroups', id));
+    void deleteDoc(doc(db, 'restaurants', restaurantId, 'tableGroups', id))
+      .catch((err) => console.error('[deleteTableGroup] write failed', id, err));
   };
 
   const setTableLayout = async (layout: TableLayout) => {
     if (!restaurantId || !user) return;
-    await updateDoc(doc(db, 'restaurants', restaurantId), {
+    void updateDoc(doc(db, 'restaurants', restaurantId), {
       'settings.tableLayout': layout,
-    });
+    }).catch((err) => console.error('[setTableLayout] write failed', err));
     setTableLayoutState(layout);
   };
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useFinance } from '../context/FinanceContext';
 import { ItemGrid } from '../components/ItemGrid';
 import { ConfirmModal } from '../components/ConfirmModal';
@@ -28,12 +28,19 @@ type EditState = { orderId: string; items: EditItem[] };
 export const TableDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { tables, recipes, recipesById, categories, updateTable, deleteTable, addTable, user, userProfile, staffPermissions, tableLayout, tableGroups } = useFinance();
 
-  // Preset placeholder: if this ID was never written to Firestore, synthesize a
-  // local Table so the page can render. On the first sendToKitchen call the doc
-  // is created with this same ID, turning the placeholder into a real table.
-  // ID format: preset_<groupId>_<num>  e.g. preset_salon_2
+  // Draft mode: TablesPage navigates here with a pre-generated `t_*` ID and
+  // the slot's identity in router state when the user taps a placeholder.
+  // No Firestore doc exists yet — we synthesize a local empty Table so the
+  // page can render. The doc is materialised on the first updateTable call
+  // (e.g. when an order is sent to the kitchen). If the user backs out
+  // without ordering, no orphan doc is left in Firestore.
+  type DraftState = { draft?: { name: string; group: string | null } };
+  const draft = (location.state as DraftState | null)?.draft ?? null;
+  // Legacy preset placeholder support (in case any in-flight route still uses
+  // the old preset_<groupId>_<num> scheme). New navigations go through `draft`.
   const isPreset = Boolean(id?.startsWith('preset_'));
   const presetTable = useMemo<Table | null>(() => {
     if (!isPreset || !id) return null;
@@ -56,7 +63,24 @@ export const TableDetailPage: React.FC = () => {
     };
   }, [id, isPreset, tableLayout, tableGroups]);
 
-  const table = useMemo(() => tables.find((t) => t.id === id) || presetTable, [tables, id, presetTable]);
+  const draftTable = useMemo<Table | null>(() => {
+    if (!draft || !id) return null;
+    return {
+      id,
+      name: draft.name,
+      ...(draft.group ? { group: draft.group } : {}),
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      orders: [],
+      totalPrice: 0,
+      transactions: [],
+    };
+  }, [draft, id]);
+
+  const table = useMemo(
+    () => tables.find((t) => t.id === id) || draftTable || presetTable,
+    [tables, id, draftTable, presetTable],
+  );
   const [basket, setBasket] = useState<TableItem[]>([]);
   const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string; target: 'basket' | 'edit' } | null>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -91,11 +115,17 @@ export const TableDetailPage: React.FC = () => {
   }, [table?.group]);
 
   useEffect(() => {
-    if (tables.length > 0 && !table && !isPreset) {
+    // Draft and preset paths always synthesize a table, so `table` is truthy
+    // and this guard is skipped naturally. For real IDs that don't resolve
+    // (e.g. a stale URL), give the snapshot a brief window to deliver before
+    // declaring the table missing.
+    if (tables.length === 0 || table || isPreset || draft) return;
+    const timer = setTimeout(() => {
       toastError('Masa bulunamadı');
       navigate('/tables');
-    }
-  }, [tables, table, navigate, isPreset]);
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [tables, table, navigate, isPreset, draft]);
 
   // If the table reloads and the order being edited no longer exists, drop edit state.
   useEffect(() => {

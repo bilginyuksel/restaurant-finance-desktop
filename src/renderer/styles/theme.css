@@ -171,7 +171,6 @@ input, textarea { font-family: inherit; }
 .table-card:hover { border-color: var(--border); }
 .table-card:active { transform: scale(0.98); }
 .table-card.empty { background: var(--surface); }
-.table-card.placeholder .name { color: var(--text-muted); }
 .table-card.active { background: linear-gradient(135deg, #b45309 0%, #92400e 100%); border-color: var(--warn); }
 .table-card.billed { background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%); border-color: var(--info); }
 .table-card.billed .status { color: rgba(255,255,255,0.85); }

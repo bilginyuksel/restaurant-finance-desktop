@@ -1,0 +1,1177 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useFinance } from '../context/FinanceContext';
+import { ItemGrid } from '../components/ItemGrid';
+import { ConfirmModal } from '../components/ConfirmModal';
+import { PaymentModal, PaymentPayload } from '../components/PaymentModal';
+import { toast, toastError, toastSuccess } from '../components/Toast';
+import { Recipe, Table, TableItem, TableOrder, Transaction } from '../../shared/types';
+import { formatCurrency, CURRENCY } from '../utils/currency';
+import {
+  itemLineTotal,
+  itemPrice,
+  recipeName,
+  recipeUnitLabel,
+  tableTotalFromOrders,
+  tableUnpaidTotal,
+} from '../utils/totals';
+import { useHotkeys } from 'react-hotkeys-hook';
+import { ReceiptLineItem, ReceiptPayload } from '../../shared/receipt';
+
+const newId = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
+// Internal type used while editing an existing order. Tracks the original quantity per line
+// and flags lines added during this edit session, so we can compute & print the kitchen delta on save.
+type EditItem = TableItem & { _origQty?: number; _isNew?: boolean };
+type EditState = { orderId: string; items: EditItem[] };
+
+export const TableDetailPage: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { tables, recipes, recipesById, categories, updateTable, deleteTable, addTable, user, userProfile, staffPermissions, tableLayout, tableGroups } = useFinance();
+
+  // Preset placeholder: if this ID was never written to Firestore, synthesize a
+  // local Table so the page can render. On the first sendToKitchen call the doc
+  // is created with this same ID, turning the placeholder into a real table.
+  // ID format: preset_<groupId>_<num>  e.g. preset_salon_2
+  const isPreset = Boolean(id?.startsWith('preset_'));
+  const presetTable = useMemo<Table | null>(() => {
+    if (!isPreset || !id) return null;
+    const parts = id.split('_'); // ['preset', groupId, num]
+    const num = parts[parts.length - 1];
+    const groupId = parts.slice(1, -1).join('_');
+    const prefix =
+      tableLayout?.groupPrefixes?.[groupId] ||
+      (tableGroups.find((g) => g.id === groupId)?.name ?? '').slice(0, 2).toUpperCase() ||
+      'M';
+    return {
+      id,
+      name: `${prefix} ${num}`,
+      group: groupId || undefined,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      orders: [],
+      totalPrice: 0,
+      transactions: [],
+    };
+  }, [id, isPreset, tableLayout, tableGroups]);
+
+  const table = useMemo(() => tables.find((t) => t.id === id) || presetTable, [tables, id, presetTable]);
+  const [basket, setBasket] = useState<TableItem[]>([]);
+  const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string; target: 'basket' | 'edit' } | null>(null);
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [prepayConfirm, setPrepayConfirm] = useState(false);
+  const [closeSettledConfirm, setCloseSettledConfirm] = useState(false);
+  // In-flight guard: blocks all mutation handlers while one is running so
+  // rapid double-clicks (or hotkey hammering) can't submit twice. The ref
+  // gives us a synchronous check; the state drives button `disabled`.
+  const busyRef = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const runExclusive = async (fn: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+  // Edit-mode: when set, picking items on the left grid is routed into this buffer
+  // (instead of the basket), and Save will persist the whole order and print only
+  // the delta (newly added items + quantity increases) to the kitchen.
+  const [edit, setEdit] = useState<EditState | null>(null);
+
+  useEffect(() => {
+    if (tables.length > 0 && !table && !isPreset) {
+      toastError('Masa bulunamadı');
+      navigate('/tables');
+    }
+  }, [tables, table, navigate, isPreset]);
+
+  // If the table reloads and the order being edited no longer exists, drop edit state.
+  useEffect(() => {
+    if (!edit || !table) return;
+    if (!(table.orders ?? []).some((o) => o.id === edit.orderId)) setEdit(null);
+  }, [edit, table]);
+
+  const canDelete = userProfile?.role === 'admin' || (staffPermissions?.canDeleteTables ?? true);
+  const canEditOrders = userProfile?.role === 'admin' || (staffPermissions?.canUpdateOrders ?? false);
+  const canRemoveItems = userProfile?.role === 'admin' || (staffPermissions?.canRemoveTableItems ?? false);
+
+  // ---------- existing-order: bulk edit ----------
+  const startEdit = (o: TableOrder) => {
+    if (!canEditOrders) return;
+    setEdit({
+      orderId: o.id,
+      items: o.items.map((it) => ({ ...it, _origQty: it.quantity })),
+    });
+  };
+
+  const cancelEdit = () => setEdit(null);
+
+  const editInc = (idx: number, delta: number) => {
+    setEdit((e) => {
+      if (!e) return e;
+      const items = [...e.items];
+      const it = items[idx];
+      if (!it || it.paymentStatus === 'paid') return e;
+      const unit = recipeUnitLabel(it.recipeId, recipes);
+      if (unit === 'kg') return e; // kg-priced lines can only be removed entirely
+      const nextQty = it.quantity + delta;
+      if (nextQty <= 0) {
+        // Allow removing only if user has permission or it's a freshly added (un-printed) line
+        if (!canRemoveItems && !it._isNew) return e;
+        items.splice(idx, 1);
+      } else {
+        items[idx] = { ...it, quantity: nextQty };
+      }
+      return { ...e, items };
+    });
+  };
+
+  const editRemove = (idx: number) => {
+    setEdit((e) => {
+      if (!e) return e;
+      const it = e.items[idx];
+      if (!it || it.paymentStatus === 'paid') return e;
+      if (!canRemoveItems && !it._isNew) return e;
+      const items = [...e.items];
+      items.splice(idx, 1);
+      return { ...e, items };
+    });
+  };
+
+  const editAdd = (recipe: Recipe, qty: number) => {
+    setEdit((e) => {
+      if (!e) return e;
+      // For weight-based, always add a new line so weights don't merge unintuitively.
+      if (recipe.pricingType === 'by_weight') {
+        return {
+          ...e,
+          items: [
+            ...e.items,
+            {
+              recipeId: recipe.id,
+              quantity: qty,
+              price: recipe.price,
+              productSnapshot: recipe,
+              paymentStatus: 'pending',
+              _isNew: true,
+            },
+          ],
+        };
+      }
+      // Merge into an existing freshly-added line of the same recipe, if any.
+      const idx = e.items.findIndex((it) => it._isNew && it.recipeId === recipe.id);
+      if (idx >= 0) {
+        const items = [...e.items];
+        items[idx] = { ...items[idx], quantity: items[idx].quantity + qty };
+        return { ...e, items };
+      }
+      return {
+        ...e,
+        items: [
+          ...e.items,
+          {
+            recipeId: recipe.id,
+            quantity: qty,
+            price: recipe.price,
+            productSnapshot: recipe,
+            paymentStatus: 'pending',
+            _isNew: true,
+          },
+        ],
+      };
+    });
+  };
+
+  const saveEdit = () => runExclusive(async () => {
+    if (!table || !edit) return;
+    const now = Date.now();
+    const cleanItems: TableItem[] = edit.items.map((it) => {
+      const { _origQty, _isNew, ...rest } = it;
+      void _origQty;
+      // Stamp createdBy/createdAt on newly added items so the rest of the app treats them like any other order item.
+      if (_isNew) {
+        return {
+          ...rest,
+          createdBy: user?.uid,
+          createdByName: user?.displayName || user?.email || 'Unknown',
+          createdAt: now,
+        };
+      }
+      return rest;
+    });
+
+    // Compute delta: new items get their full quantity; existing items contribute (new - original) if positive.
+    const deltaItems: TableItem[] = [];
+    for (const it of edit.items) {
+      if (it._isNew) {
+        deltaItems.push({ ...it, _isNew: undefined, _origQty: undefined } as TableItem);
+      } else if (typeof it._origQty === 'number' && it.quantity > it._origQty) {
+        deltaItems.push({ ...it, quantity: it.quantity - it._origQty, _origQty: undefined } as TableItem);
+      }
+    }
+
+    // Compute cancellations: any decrease in qty (or full removal) of a previously-persisted line.
+    // We aggregate by recipeId so multiple lines of the same recipe collapse into a single İPTAL row.
+    const originalOrder = (table.orders ?? []).find((o) => o.id === edit.orderId);
+    const cancelledItems: TableItem[] = [];
+    if (originalOrder) {
+      const originalByRecipe = new Map<string, { qty: number; sample: TableItem }>();
+      for (const it of originalOrder.items) {
+        const cur = originalByRecipe.get(it.recipeId);
+        if (cur) cur.qty += it.quantity;
+        else originalByRecipe.set(it.recipeId, { qty: it.quantity, sample: it });
+      }
+      const remainingByRecipe = new Map<string, number>();
+      for (const it of edit.items) {
+        if (it._isNew) continue;
+        remainingByRecipe.set(it.recipeId, (remainingByRecipe.get(it.recipeId) ?? 0) + it.quantity);
+      }
+      for (const [recipeId, { qty: origQty, sample }] of originalByRecipe) {
+        const remaining = remainingByRecipe.get(recipeId) ?? 0;
+        const cancelledQty = +(origQty - remaining).toFixed(6);
+        if (cancelledQty > 0) {
+          cancelledItems.push({ ...sample, quantity: cancelledQty });
+        }
+      }
+    }
+
+    // Build the next orders list. If after edit the order becomes empty, drop it.
+    const nextOrders = (table.orders ?? [])
+      .map((o) => (o.id === edit.orderId ? stampOrder({ ...o, items: cleanItems }) : o))
+      .filter((o) => o.items.length > 0);
+
+    const next: Table = {
+      ...table,
+      orders: nextOrders,
+      totalPrice: tableTotalFromOrders({ ...table, orders: nextOrders }, recipes),
+    };
+
+    try {
+      await updateTable(next);
+      setEdit(null);
+      if (deltaItems.length > 0 || cancelledItems.length > 0) {
+        const deltaOrder: TableOrder = {
+          id: newId('o-edit'),
+          items: deltaItems,
+          createdBy: user?.uid,
+          createdByName: user?.displayName || user?.email || 'Unknown',
+          createdAt: now,
+        };
+        // Print delta with a clear marker so the kitchen knows it's a change, not a brand-new order.
+        void printKitchen(deltaOrder, `${table.name} (DEĞİŞİKLİK)`, cancelledItems);
+        if (deltaItems.length > 0 && cancelledItems.length > 0) {
+          toastSuccess('Sipariş güncellendi · değişiklikler yazdırıldı');
+        } else if (cancelledItems.length > 0) {
+          toastSuccess('Sipariş güncellendi · iptaller yazdırıldı');
+        } else {
+          toastSuccess('Sipariş güncellendi · yeni ürünler yazdırıldı');
+        }
+      } else {
+        toastSuccess('Sipariş güncellendi');
+      }
+    } catch (err) {
+      console.error(err);
+      toastError('Sipariş güncellenemedi');
+    }
+  });
+
+  const stampOrder = (o: TableOrder): TableOrder => ({
+    ...o,
+    updatedAt: Date.now(),
+    updatedBy: user?.uid,
+    updatedByName: user?.displayName || user?.email || undefined,
+  });
+
+  // ---------- basket management ----------
+  const addToBasket = (recipe: Recipe, qty: number) => {
+    setBasket((b) => {
+      // For weight-based, always add a new line so weights don't merge unintuitively.
+      if (recipe.pricingType === 'by_weight') {
+        return [
+          ...b,
+          {
+            recipeId: recipe.id,
+            quantity: qty,
+            price: recipe.price * qty / qty, // unit price (per kg)
+            productSnapshot: recipe,
+          },
+        ];
+      }
+      const idx = b.findIndex((it) => it.recipeId === recipe.id);
+      if (idx >= 0) {
+        const copy = [...b];
+        copy[idx] = { ...copy[idx], quantity: copy[idx].quantity + qty };
+        return copy;
+      }
+      return [
+        ...b,
+        {
+          recipeId: recipe.id,
+          quantity: qty,
+          price: recipe.price,
+          productSnapshot: recipe,
+        },
+      ];
+    });
+  };
+
+  const handlePickRecipe = (recipe: Recipe) => {
+    const target: 'basket' | 'edit' = edit ? 'edit' : 'basket';
+    if (recipe.pricingType === 'by_weight') {
+      setWeightModal({ recipe, value: '', target });
+      return;
+    }
+    if (target === 'edit') editAdd(recipe, 1);
+    else addToBasket(recipe, 1);
+  };
+
+  const confirmWeight = () => {
+    if (!weightModal) return;
+    const kg = parseFloat(weightModal.value.replace(',', '.'));
+    if (!kg || kg <= 0) {
+      toastError('Geçerli bir ağırlık girin (kg, örn: 0,452)');
+      return;
+    }
+    if (weightModal.target === 'edit') editAdd(weightModal.recipe, kg);
+    else addToBasket(weightModal.recipe, kg);
+    setWeightModal(null);
+  };
+
+  const incBasket = (idx: number, delta: number) => {
+    setBasket((b) => {
+      const copy = [...b];
+      const next = (copy[idx].quantity ?? 0) + delta;
+      if (next <= 0) {
+        copy.splice(idx, 1);
+      } else {
+        copy[idx] = { ...copy[idx], quantity: next };
+      }
+      return copy;
+    });
+  };
+
+  // ---------- send to kitchen ----------
+  const sendToKitchen = () => runExclusive(async () => {
+    if (!table || basket.length === 0) return;
+
+    // If this is still a placeholder (no Firestore doc yet), create it now.
+    const isPersistedTable = tables.some((t) => t.id === table.id);
+    if (!isPersistedTable) {
+      try {
+        await addTable(table);
+      } catch (err) {
+        console.error(err);
+        toastError('Masa oluşturulamadı');
+        return;
+      }
+    }
+
+    const order: TableOrder = {
+      id: newId('o'),
+      items: basket.map((it) => ({
+        ...it,
+        createdBy: user?.uid,
+        createdByName: user?.displayName || user?.email || 'Unknown',
+        createdAt: Date.now(),
+        paymentStatus: 'pending',
+      })),
+      createdBy: user?.uid,
+      createdByName: user?.displayName || user?.email || 'Unknown',
+      createdAt: Date.now(),
+    };
+
+    const newTable: Table = {
+      ...table,
+      orders: [...(table.orders ?? []), order],
+      totalPrice: tableTotalFromOrders({ ...table, orders: [...(table.orders ?? []), order] }, recipes),
+      receiptPrinted: false,
+    };
+    try {
+      await updateTable(newTable);
+      // Fire-and-forget kitchen print (don't block UI)
+      void printKitchen(order, table.name);
+      setBasket([]);
+      toastSuccess('Mutfağa gönderildi');
+    } catch (err) {
+      console.error(err);
+      toastError('Sipariş gönderilemedi');
+    }
+  });
+
+  // ---------- printing ----------
+  // TableItem may carry an extra `_cancelled` marker (set by saveEdit) so the kitchen ticket
+  // line is rendered with an İPTAL tag. The flag is stripped before reaching the receipt payload.
+  const buildLineItems = (items: (TableItem & { _cancelled?: boolean })[]): ReceiptLineItem[] =>
+    items.map((it) => ({
+      name: recipeName(it.recipeId, recipes),
+      quantity: recipeUnitLabel(it.recipeId, recipes) === 'kg' ? +(it.quantity * 1000).toFixed(0) : it.quantity,
+      unitLabel: recipeUnitLabel(it.recipeId, recipes) === 'kg' ? 'g' : undefined,
+      unitPrice: itemPrice(it, recipes),
+      lineTotal: itemLineTotal(it, recipes),
+      cancelled: it._cancelled || undefined,
+    }));
+
+  const printKitchen = async (
+    order: TableOrder,
+    tableName: string,
+    cancelledItems: TableItem[] = [],
+  ) => {
+    if (order.items.length === 0 && cancelledItems.length === 0) return;
+
+    // Look up category-routing each time we print so changes in Settings take effect.
+    let routing: Record<string, string> = {};
+    try {
+      routing = await window.api.getCategoryRouting();
+    } catch {
+      routing = {};
+    }
+
+    // Group items by destination printer id. '' means default kitchen.
+    const groups = new Map<string, (TableItem & { _cancelled?: boolean })[]>();
+    const pushTo = (it: TableItem & { _cancelled?: boolean }) => {
+      const recipe = recipes.find((r) => r.id === it.recipeId);
+      const cat = recipe?.category ?? '';
+      const dest = routing[cat] ?? '';
+      const arr = groups.get(dest) ?? [];
+      arr.push(it);
+      groups.set(dest, arr);
+    };
+    for (const it of order.items) pushTo(it);
+    for (const it of cancelledItems) pushTo({ ...it, _cancelled: true });
+
+    const baseTimestamp = new Date().toLocaleString('tr-TR');
+    const waiterName = user?.displayName || user?.email || undefined;
+
+    for (const [dest, items] of groups) {
+      const payload: ReceiptPayload = {
+        kind: 'kitchen',
+        tableName,
+        timestamp: baseTimestamp,
+        currency: CURRENCY,
+        items: buildLineItems(items),
+        total: items.reduce((s, it) => s + (it._cancelled ? 0 : itemLineTotal(it, recipes)), 0),
+        waiterName,
+      };
+      const res = dest
+        ? await window.api.printKitchenTo(dest, payload)
+        : await window.api.printKitchenTicket(payload);
+      if (!res.ok) toastError(`Yazıcı (${dest || 'mutfak'}): ${res.error}`);
+    }
+  };
+
+  const printCustomerBill = () => runExclusive(async () => {
+    if (!table) return;
+    const allItems = (table.orders ?? []).flatMap((o) => o.items);
+    if (allItems.length === 0) {
+      toastError('Masada ürün yok');
+      return;
+    }
+    const payload: ReceiptPayload = {
+      kind: 'customer',
+      restaurantName: 'HobiPark',
+      tableName: table.name,
+      timestamp: new Date().toLocaleString('tr-TR'),
+      currency: CURRENCY,
+      items: buildLineItems(allItems),
+      total: tableTotalFromOrders(table, recipes),
+      waiterName: user?.displayName || user?.email || undefined,
+    };
+    const res = await window.api.printCustomerBill(payload);
+    if (res.ok) {
+      toastSuccess('Fiş yazdırıldı');
+      await updateTable({ ...table, receiptPrinted: true });
+    } else toastError(`Yazıcı: ${res.error}`);
+  });
+
+  // ---------- close / pay ----------
+  // Apply a payment to the table. Supports full, custom amount, or per-item partial payments.
+  // When the table's remaining balance reaches 0 the table is auto-closed and the user navigated back.
+  const takePayment = (p: PaymentPayload) => runExclusive(async () => {
+    if (!table) return;
+    const now = Date.now();
+    const userName = user?.displayName || user?.email || 'Unknown';
+    let nextOrders: TableOrder[] = table.orders ?? [];
+    let paidItems: TableItem[] | undefined;
+    // grossAmount = portion of the bill being settled (pre-discount/rounding).
+    // amount      = actual money collected (post-discount, post-rounding).
+    // For 'all' and 'items' modes the modal computes confirmAmount from the
+    // selected lines, so p.grossAmount already matches the recomputed totals
+    // below — but we recompute defensively to avoid rounding drift from the
+    // modal's display formatting.
+    let grossAmount = p.grossAmount;
+
+    if (p.mode === 'all') {
+      paidItems = [];
+      nextOrders = nextOrders.map((o) => {
+        const newItems = o.items.map((it) => {
+          if (it.paymentStatus === 'paid') return it;
+          const paidLine: TableItem = { ...it, paymentStatus: 'paid' };
+          paidItems!.push(paidLine);
+          return paidLine;
+        });
+        return stampOrder({ ...o, items: newItems });
+      });
+      grossAmount = tableUnpaidTotal(table, recipes);
+    } else if (p.mode === 'items') {
+      paidItems = [];
+      nextOrders = nextOrders.map((o) => {
+        const sel = p.selections.get(o.id);
+        if (!sel || sel.size === 0) return o;
+        const newItems: TableItem[] = [];
+        o.items.forEach((it, idx) => {
+          const payQty = sel.get(idx) ?? 0;
+          if (payQty <= 0 || it.paymentStatus === 'paid') {
+            newItems.push(it);
+            return;
+          }
+          const unit = recipeUnitLabel(it.recipeId, recipes);
+          if (unit === 'kg' || payQty >= it.quantity) {
+            const paidLine: TableItem = { ...it, paymentStatus: 'paid' };
+            newItems.push(paidLine);
+            paidItems!.push(paidLine);
+          } else {
+            // Split line: remaining (pending) + paid portion
+            const remaining: TableItem = { ...it, quantity: it.quantity - payQty };
+            const paidLine: TableItem = { ...it, quantity: payQty, paymentStatus: 'paid' };
+            newItems.push(remaining, paidLine);
+            paidItems!.push(paidLine);
+          }
+        });
+        return stampOrder({ ...o, items: newItems });
+      });
+      grossAmount = paidItems.reduce((s, it) => s + itemLineTotal(it, recipes), 0);
+    }
+    // mode === 'amount' leaves orders untouched; the gross is whatever the
+    // cashier typed before adjustments (i.e. p.grossAmount as-is).
+
+    const tx: Transaction = {
+      id: newId('tx'),
+      tableId: table.id,
+      amount: +p.amount.toFixed(2),
+      grossAmount: +grossAmount.toFixed(2),
+      paymentMethod: p.method,
+      mode: p.mode,
+      ...(p.discount && p.discount > 0 ? { discount: +p.discount.toFixed(2) } : {}),
+      ...(p.rounding && p.rounding !== 0 ? { rounding: +p.rounding.toFixed(2) } : {}),
+      ...(p.isPrepayment ? { isPrepayment: true } : {}),
+      ...(paidItems !== undefined ? { items: paidItems } : {}),
+      createdAt: now,
+      createdBy: user?.uid,
+      createdByName: userName,
+    };
+
+    const totalAfter = tableTotalFromOrders({ ...table, orders: nextOrders }, recipes);
+    // Compare gross-paid against the bill so discounts close the table.
+    const grossPaidAfter =
+      (table.transactions ?? []).reduce(
+        (s, t) => s + (t.grossAmount ?? t.amount ?? 0),
+        0,
+      ) + (tx.grossAmount ?? tx.amount);
+    // Do not auto-close on pre-payment (no orders yet, totalAfter === 0)
+    const fullyPaid = totalAfter > 0 && grossPaidAfter + 0.005 >= totalAfter;
+
+    const next: Table = {
+      ...table,
+      orders: nextOrders,
+      totalPrice: totalAfter,
+      transactions: [...(table.transactions ?? []), tx],
+      ...(fullyPaid
+        ? { status: 'closed' as const, closedAt: new Date().toISOString(), paymentMethod: p.method }
+        : {}),
+    };
+
+    try {
+      await updateTable(next);
+      setPaymentOpen(false);
+      if (fullyPaid) {
+        toastSuccess('Masa tamamen ödendi ve kapatıldı');
+        navigate('/tables');
+      } else {
+        const remaining = Math.max(0, totalAfter - grossPaidAfter);
+        toastSuccess(`${formatCurrency(tx.amount)} tahsil edildi · Kalan ${formatCurrency(remaining)}`);
+      }
+    } catch (err) {
+      console.error(err);
+      toastError('Ödeme alınamadı');
+    }
+  });
+
+  // Close a fully-settled table (pre-payment already covers the order total, no new transaction needed).
+  const closeSettledTable = () => runExclusive(async () => {
+    if (!table) return;
+    const next: Table = {
+      ...table,
+      status: 'closed',
+      closedAt: new Date().toISOString(),
+    };
+    try {
+      await updateTable(next);
+      toastSuccess('Masa kapatıldı');
+      navigate('/tables');
+    } catch (err) {
+      console.error(err);
+      toastError('Masa kapatılamadı');
+    }
+  });
+
+  const handleDelete = async () => {
+    if (!table) return;
+    if ((table.orders?.length ?? 0) > 0) {
+      toastError('Siparişi olan masa silinemez');
+      return;
+    }
+    try {
+      await deleteTable(table.id);
+      navigate('/tables');
+    } catch (err) {
+      console.error(err);
+      toastError('Masa silinemedi');
+    }
+  };
+
+  // ---------- hotkeys ----------
+  useHotkeys(
+    'enter',
+    () => {
+      if (edit) void saveEdit();
+      else if (basket.length > 0) void sendToKitchen();
+    },
+    { enableOnFormTags: false },
+  );
+  useHotkeys('p', () => void printCustomerBill(), { enableOnFormTags: false });
+  useHotkeys('escape', () => {
+    if (edit) cancelEdit();
+    else navigate('/tables');
+  });
+
+  if (!table) return <div className="empty-state">Yükleniyor…</div>;
+
+  // ---- Read-only view for closed tables ----
+  if (table.status === 'closed') {
+    const closedTotal = tableTotalFromOrders(table, recipes);
+    const txs = table.transactions ?? [];
+    const closedPaid = txs.reduce((s, t) => s + t.amount, 0);
+    const closedGross = txs.reduce((s, t) => s + (t.grossAmount ?? t.amount), 0);
+    const totalDiscount = txs.reduce((s, t) => s + (t.discount ?? 0), 0);
+    const totalRounding = txs.reduce((s, t) => s + (t.rounding ?? 0), 0);
+    const cashTotal = txs
+      .filter((t) => t.paymentMethod === 'cash')
+      .reduce((s, t) => s + t.amount, 0);
+    const cardTotal = txs
+      .filter((t) => t.paymentMethod === 'credit_card')
+      .reduce((s, t) => s + t.amount, 0);
+    const canSeePrices = userProfile?.role === 'admin' || (staffPermissions?.canSeeHistoryPrices ?? true);
+    const canSeeTotal = userProfile?.role === 'admin' || (staffPermissions?.canSeeHistoryTotal ?? true);
+    const methodIcon = (m?: string) =>
+      m === 'cash' ? '💵' : m === 'credit_card' ? '💳' : '•';
+    const methodLabel = (m?: string) =>
+      m === 'cash' ? 'Nakit' : m === 'credit_card' ? 'Kart' : '—';
+    const modeLabel = (m?: string) =>
+      m === 'all' ? 'Tümü' : m === 'items' ? 'Ürün seçimi' : m === 'amount' ? 'Tutar' : null;
+
+    return (
+      <div className="closed-table-view">
+        {/* Header */}
+        <div className="flex-row closed-table-header">
+          <button className="btn small" onClick={() => navigate('/history')}>← Geri</button>
+          <h2 style={{ margin: 0 }}>Masa {table.name}</h2>
+          <span className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)', fontSize: 12 }}>
+            Kapalı
+          </span>
+          {/* Top-line payment summary: show split if mixed, otherwise the single method. */}
+          {cashTotal > 0 && cardTotal > 0 ? (
+            <span className="muted" style={{ fontSize: 13 }}>
+              💵 {formatCurrency(cashTotal)} · 💳 {formatCurrency(cardTotal)}
+            </span>
+          ) : table.paymentMethod ? (
+            <span className="muted" style={{ fontSize: 13 }}>
+              {methodIcon(table.paymentMethod)} {methodLabel(table.paymentMethod)}
+            </span>
+          ) : null}
+          {table.closedAt && (
+            <span className="muted" style={{ fontSize: 13 }}>
+              {new Date(table.closedAt).toLocaleString('tr-TR')}
+            </span>
+          )}
+          <div className="spacer" />
+          {canSeeTotal && (
+            <span style={{ fontWeight: 700, fontSize: 18 }}>{formatCurrency(closedTotal)}</span>
+          )}
+        </div>
+
+        {/* Orders */}
+        <div className="closed-table-orders">
+          {(table.orders ?? []).length === 0 ? (
+            <div className="muted">Sipariş kaydı yok.</div>
+          ) : (
+            (table.orders ?? []).slice().reverse().map((o) => {
+              const orderTotal = o.items.reduce((s, it) => s + itemLineTotal(it, recipesById), 0);
+              return (
+                <div key={o.id} className="order-block">
+                  <div className="order-head">
+                    <span>{new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}</span>
+                    <span>{o.createdByName ?? ''}</span>
+                  </div>
+                  {o.items.map((it, i) => {
+                    const unit = recipeUnitLabel(it.recipeId, recipesById);
+                    const qty = unit === 'kg' ? `${(it.quantity * 1000).toFixed(0)}g` : `${it.quantity}x`;
+                    return (
+                      <div key={i} className={`order-item${it.paymentStatus === 'paid' ? ' paid' : ''}`}>
+                        <div className="order-item-main">
+                          <span className="order-item-name">{qty} {recipeName(it.recipeId, recipesById)}</span>
+                          {canSeePrices && (
+                            <span className="order-item-price">{formatCurrency(itemLineTotal(it, recipesById))}</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {canSeeTotal && (
+                    <div className="order-foot">
+                      <span className="muted">Sipariş toplamı</span>
+                      <span className="spacer" />
+                      <span className="order-foot-total">{formatCurrency(orderTotal)}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Totals summary */}
+        {canSeeTotal && (
+          <div className="totals" style={{ maxWidth: 340 }}>
+            <div className="row">
+              <span>Masa toplam</span>
+              <span>{formatCurrency(closedTotal)}</span>
+            </div>
+            {totalDiscount > 0 && (
+              <div className="row">
+                <span>İndirim</span>
+                <span className="warn-text">−{formatCurrency(totalDiscount)}</span>
+              </div>
+            )}
+            {totalRounding !== 0 && (
+              <div className="row">
+                <span>Yuvarlama</span>
+                <span className={totalRounding > 0 ? 'ok-text' : 'warn-text'}>
+                  {totalRounding > 0 ? '+' : '−'}{formatCurrency(Math.abs(totalRounding))}
+                </span>
+              </div>
+            )}
+            {cashTotal > 0 && (
+              <div className="row">
+                <span>💵 Nakit</span>
+                <span className="ok-text">{formatCurrency(cashTotal)}</span>
+              </div>
+            )}
+            {cardTotal > 0 && (
+              <div className="row">
+                <span>💳 Kart</span>
+                <span className="ok-text">{formatCurrency(cardTotal)}</span>
+              </div>
+            )}
+            <div className="row">
+              <span>Tahsilat toplamı</span>
+              <span className="ok-text">{formatCurrency(closedPaid)}</span>
+            </div>
+            <div className="row grand">
+              <span>Kalan</span>
+              <span>{formatCurrency(Math.max(0, closedTotal - closedGross))}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Transaction history — every individual settlement on this table */}
+        {canSeeTotal && txs.length > 0 && (
+          <div className="closed-table-transactions" style={{ marginTop: 16 }}>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: 16 }}>Ödeme Kayıtları</h3>
+            <div className="transaction-list">
+              {txs
+                .slice()
+                .sort((a, b) => a.createdAt - b.createdAt)
+                .map((t) => {
+                  const mLabel = modeLabel(t.mode);
+                  const gross = t.grossAmount ?? t.amount;
+                  const itemCount = (t.items ?? []).reduce((s, it) => s + it.quantity, 0);
+                  return (
+                    <div key={t.id} className="order-block">
+                      <div className="order-head">
+                        <span>
+                          {methodIcon(t.paymentMethod)} {methodLabel(t.paymentMethod)}
+                          {mLabel ? ` · ${mLabel}` : ''}
+                          {t.isPrepayment ? ' · Ön ödeme' : ''}
+                        </span>
+                        <span>
+                          {new Date(t.createdAt).toLocaleString('tr-TR')}
+                          {t.createdByName ? ` · ${t.createdByName}` : ''}
+                        </span>
+                      </div>
+                      <div className="order-item">
+                        <div className="order-item-main">
+                          <span className="order-item-name">Brüt</span>
+                          <span className="order-item-price">{formatCurrency(gross)}</span>
+                        </div>
+                      </div>
+                      {!!t.discount && t.discount > 0 && (
+                        <div className="order-item">
+                          <div className="order-item-main">
+                            <span className="order-item-name warn-text">İndirim</span>
+                            <span className="order-item-price warn-text">−{formatCurrency(t.discount)}</span>
+                          </div>
+                        </div>
+                      )}
+                      {!!t.rounding && t.rounding !== 0 && (
+                        <div className="order-item">
+                          <div className="order-item-main">
+                            <span className="order-item-name">Yuvarlama</span>
+                            <span className={`order-item-price ${t.rounding > 0 ? 'ok-text' : 'warn-text'}`}>
+                              {t.rounding > 0 ? '+' : '−'}{formatCurrency(Math.abs(t.rounding))}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {t.mode === 'items' && itemCount > 0 && (
+                        <div className="order-item">
+                          <div className="order-item-main">
+                            <span className="order-item-name muted">
+                              {Math.round(itemCount)} ürün ödendi
+                              {(t.items ?? []).length > 0 && canSeePrices ? ': ' : ''}
+                              {(t.items ?? [])
+                                .map((it) => {
+                                  const unit = recipeUnitLabel(it.recipeId, recipesById);
+                                  const qty = unit === 'kg' ? `${(it.quantity * 1000).toFixed(0)}g` : `${it.quantity}x`;
+                                  return `${qty} ${recipeName(it.recipeId, recipesById)}`;
+                                })
+                                .join(', ')}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      <div className="order-foot">
+                        <span className="muted">Tahsilat</span>
+                        <span className="spacer" />
+                        <span className="order-foot-total">{formatCurrency(t.amount)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const basketTotal = basket.reduce((s, it) => s + itemLineTotal(it, recipesById), 0);
+  const tableTotal = tableTotalFromOrders(table, recipesById);
+  const paid = (table.transactions ?? []).reduce((s, t) => s + t.amount, 0);
+  const unpaid = Math.max(0, tableTotal - paid);
+
+  const editTotal = edit ? edit.items.reduce((s, it) => s + itemLineTotal(it, recipesById), 0) : 0;
+  const editOrigTotal = edit
+    ? edit.items.reduce((s, it) => {
+        const origQty = it._isNew ? 0 : (it._origQty ?? it.quantity);
+        const unitPrice = itemPrice(it, recipes);
+        return s + unitPrice * origQty;
+      }, 0)
+    : 0;
+  const editDiff = editTotal - editOrigTotal;
+  const editingOrder = edit ? (table.orders ?? []).find((o) => o.id === edit.orderId) ?? null : null;
+
+  return (
+    <div className="detail-split-3">
+      <div className="detail-main">
+        <div className="flex-row">
+          <button className="btn small" onClick={() => navigate('/tables')}>← Geri</button>
+          <h2 style={{ margin: 0 }}>Masa {table.name}</h2>
+          <span className="muted">({table.orders?.length ?? 0} sipariş)</span>
+          <div className="spacer" />
+          {canDelete && (table.orders?.length ?? 0) === 0 && (
+            <button className="btn danger small" onClick={() => setConfirmDelete(true)}>Sil</button>
+          )}
+        </div>
+        <ItemGrid recipes={recipes} categories={categories} onPick={handlePickRecipe} />
+      </div>
+
+      {/* Middle column — existing orders on this table */}
+      <aside className="detail-orders">
+        <div className="orders-section-head">
+          <span>Masadaki Siparişler</span>
+          <span className="muted">{(table.orders ?? []).length}</span>
+        </div>
+        <div className="orders-scroll">
+          {(table.orders ?? []).length === 0 && <div className="muted">Henüz sipariş yok</div>}
+          {(table.orders ?? []).slice().reverse().map((o) => {
+            const isEditing = edit?.orderId === o.id;
+            const orderTotal = o.items.reduce((s, it) => s + itemLineTotal(it, recipes), 0);
+            const hasUnpaid = o.items.some((it) => it.paymentStatus !== 'paid');
+            return (
+              <div key={o.id} className={`order-block${isEditing ? ' editing' : ''}`}>
+                <div className="order-head">
+                  <span>{new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}</span>
+                  <span>{o.createdByName ?? ''}</span>
+                </div>
+                {o.items.map((it, i) => {
+                  const unit = recipeUnitLabel(it.recipeId, recipes);
+                  const qty = unit === 'kg' ? `${(it.quantity * 1000).toFixed(0)}g` : `${it.quantity}x`;
+                  const paidItem = it.paymentStatus === 'paid';
+                  return (
+                    <div key={i} className={`order-item${paidItem ? ' paid' : ''}`}>
+                      <div className="order-item-main">
+                        <span className="order-item-name">{qty} {recipeName(it.recipeId, recipes)}</span>
+                        <span className="order-item-price">{formatCurrency(itemLineTotal(it, recipes))}</span>
+                      </div>
+                      {paidItem && <span className="order-item-paid muted">ödendi</span>}
+                    </div>
+                  );
+                })}
+                <div className="order-foot">
+                  <span className="muted">Toplam</span>
+                  <span className="order-foot-total">{formatCurrency(orderTotal)}</span>
+                  {canEditOrders && hasUnpaid && !isEditing && (
+                    <button className="btn small" onClick={() => startEdit(o)}>Düzenle</button>
+                  )}
+                  {isEditing && <span className="badge editing-badge">DÜZENLENİYOR</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+
+      {/* Right column — either the new-order basket OR the edit panel for the selected order */}
+      <aside className="detail-side">
+        {edit ? (
+          <section className="basket-panel edit-panel">
+            <header className="basket-panel-head">
+              <span className="basket-panel-title">Sipariş Düzenle</span>
+              <span className="basket-panel-badge edit">
+                {editingOrder ? new Date(editingOrder.createdAt ?? 0).toLocaleTimeString('tr-TR') : ''}
+              </span>
+              <div className="spacer" />
+              <button className="btn small" onClick={cancelEdit}>İptal (Esc)</button>
+            </header>
+            <div className="basket-list">
+              {edit.items.length === 0 ? (
+                <div className="basket-empty">Tüm ürünler kaldırıldı. Kaydederseniz bu sipariş silinir.</div>
+              ) : (
+                edit.items.map((it, idx) => {
+                  const unit = recipeUnitLabel(it.recipeId, recipes);
+                  const qtyDisplay = unit === 'kg' ? `${(it.quantity * 1000).toFixed(0)}g` : it.quantity;
+                  const paidItem = it.paymentStatus === 'paid';
+                  const locked = paidItem;
+                  const increased = !it._isNew && typeof it._origQty === 'number' && it.quantity > it._origQty;
+                  const decreased = !it._isNew && typeof it._origQty === 'number' && it.quantity < it._origQty;
+                  return (
+                    <div
+                      key={idx}
+                      className={`basket-row${it._isNew ? ' new' : ''}${increased ? ' increased' : ''}${decreased ? ' decreased' : ''}${locked ? ' locked' : ''}`}
+                    >
+                      <div className="qty-ctrl">
+                        {unit !== 'kg' && !locked && (
+                          <>
+                            <button onClick={() => editInc(idx, -1)}>−</button>
+                            <span className="qty">{qtyDisplay}</span>
+                            <button onClick={() => editInc(idx, +1)}>+</button>
+                          </>
+                        )}
+                        {(unit === 'kg' || locked) && <span className="qty">{qtyDisplay}</span>}
+                      </div>
+                      <div className="name">
+                        {recipeName(it.recipeId, recipes)}
+                        {it._isNew && <span className="row-tag new"> YENİ</span>}
+                        {increased && <span className="row-tag inc"> +{it.quantity - (it._origQty ?? 0)}</span>}
+                        {decreased && <span className="row-tag dec"> −{(it._origQty ?? 0) - it.quantity}</span>}
+                        {locked && <span className="row-tag paid"> ödendi</span>}
+                      </div>
+                      <div className="price">{formatCurrency(itemLineTotal(it, recipes))}</div>
+                      {!locked && (canRemoveItems || it._isNew) && (
+                        <button className="btn small danger" onClick={() => editRemove(idx)} title="Kaldır">×</button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="basket-panel-foot">
+              <div className="basket-panel-subtotal">
+                <span>Yeni Toplam</span>
+                <span>{formatCurrency(editTotal)}</span>
+              </div>
+              <div className="basket-panel-subtotal small">
+                <span className="muted">Fark</span>
+                <span className={editDiff > 0 ? 'ok-text' : editDiff < 0 ? 'warn-text' : 'muted'}>
+                  {editDiff > 0 ? '+' : ''}{formatCurrency(editDiff)}
+                </span>
+              </div>
+              <button className="btn primary large block" disabled={busy} onClick={() => void saveEdit()}>
+                Kaydet &amp; Yeni Ürünleri Yazdır (Enter)
+              </button>
+            </div>
+          </section>
+        ) : (
+          <section className="basket-panel">
+            <header className="basket-panel-head">
+              <span className="basket-panel-title">Yeni Sipariş</span>
+              <span className="basket-panel-badge">{basket.length}</span>
+            </header>
+            <div className="basket-list">
+              {basket.length === 0 ? (
+                <div className="basket-empty">Ürün eklemek için soldaki listeden tıklayın.</div>
+              ) : (
+                basket.map((it, idx) => {
+                  const unit = recipeUnitLabel(it.recipeId, recipes);
+                  const qtyDisplay = unit === 'kg' ? `${(it.quantity * 1000).toFixed(0)}g` : it.quantity;
+                  return (
+                    <div key={idx} className="basket-row">
+                      <div className="qty-ctrl">
+                        {unit !== 'kg' && (
+                          <>
+                            <button onClick={() => incBasket(idx, -1)}>−</button>
+                            <span className="qty">{qtyDisplay}</span>
+                            <button onClick={() => incBasket(idx, +1)}>+</button>
+                          </>
+                        )}
+                        {unit === 'kg' && <span className="qty">{qtyDisplay}</span>}
+                      </div>
+                      <div className="name">{recipeName(it.recipeId, recipes)}</div>
+                      <div className="price">{formatCurrency(itemLineTotal(it, recipes))}</div>
+                      {unit === 'kg' && (
+                        <button className="btn small danger" onClick={() => incBasket(idx, -it.quantity)}>×</button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div className="basket-panel-foot">
+              <div className="basket-panel-subtotal">
+                <span>Sepet Toplamı</span>
+                <span>{formatCurrency(basketTotal)}</span>
+              </div>
+              <button className="btn primary large block" disabled={busy || basket.length === 0} onClick={sendToKitchen}>
+                Onayla &amp; Mutfağa Gönder (Enter)
+              </button>
+            </div>
+          </section>
+        )}
+
+        <div className="totals">
+          <div className="row">
+            <span>Masa toplam</span>
+            <span>{formatCurrency(tableTotal)}</span>
+          </div>
+          {paid > 0 && (
+            <div className="row">
+              <span>Ödenen</span>
+              <span className="ok-text">−{formatCurrency(paid)}</span>
+            </div>
+          )}
+          <div className="row grand">
+            <span>Kalan</span>
+            <span>{formatCurrency(unpaid)}</span>
+          </div>
+        </div>
+
+        <div className="flex-row">
+          <button className="btn info" style={{ flex: 1 }} onClick={printCustomerBill} disabled={busy || !!edit}>
+            Fiş Yazdır (P)
+          </button>
+        </div>
+        <button
+          className="btn warn large block"
+          disabled={!!edit}
+          onClick={() => {
+            if (unpaid <= 0 && tableTotal > 0) setCloseSettledConfirm(true);
+            else if (unpaid <= 0) setPrepayConfirm(true);
+            else setPaymentOpen(true);
+          }}
+        >
+          {unpaid <= 0 && tableTotal > 0 ? 'Hesabı Kapat' : 'Ödeme Al'}
+        </button>
+        {unpaid <= 0 && tableTotal > 0 && !edit && (
+          <button
+            className="btn small block"
+            style={{ marginTop: 6 }}
+            onClick={() => setPaymentOpen(true)}
+          >
+            + Ön Ödeme Ekle
+          </button>
+        )}
+      </aside>
+
+      <ConfirmModal
+        open={!!weightModal}
+        title={`${weightModal?.recipe.name ?? ''} — Ağırlık`}
+        confirmLabel="Ekle"
+        onConfirm={confirmWeight}
+        onCancel={() => setWeightModal(null)}
+      >
+        <label className="label">Ağırlık (kg, örn: 0,452)</label>
+        <input
+          className="input"
+          type="text"
+          inputMode="decimal"
+          autoFocus
+          value={weightModal?.value ?? ''}
+          onChange={(e) => setWeightModal((m) => (m ? { ...m, value: e.target.value } : m))}
+          onKeyDown={(e) => { if (e.key === 'Enter') confirmWeight(); }}
+        />
+        <div className="muted">
+          Birim fiyat: {weightModal ? formatCurrency(weightModal.recipe.price) : ''} / kg
+        </div>
+      </ConfirmModal>
+
+      <PaymentModal
+        open={paymentOpen}
+        table={table}
+        recipes={recipesById}
+        forcePrepayment={unpaid <= 0 && tableTotal > 0}
+        onCancel={() => setPaymentOpen(false)}
+        onConfirm={(p) => void takePayment(p)}
+      />
+
+      <ConfirmModal
+        open={closeSettledConfirm}
+        title="Hesabı Kapat"
+        message={`Ön ödeme (${formatCurrency(paid)}) masa tutarını (${formatCurrency(tableTotal)}) karşılıyor. Ek ödeme almadan masayı kapatmak istiyor musunuz?`}
+        confirmLabel="Evet, Kapat"
+        onConfirm={() => {
+          setCloseSettledConfirm(false);
+          void closeSettledTable();
+        }}
+        onCancel={() => setCloseSettledConfirm(false)}
+      />
+
+      <ConfirmModal
+        open={prepayConfirm}
+        title="Ön Ödeme"
+        message="Masada henüz sipariş yok. Müşteriden peşin / ön ödeme almak istediğinize emin misiniz?"
+        confirmLabel="Evet, Ön Ödeme Al"
+        onConfirm={() => { setPrepayConfirm(false); setPaymentOpen(true); }}
+        onCancel={() => setPrepayConfirm(false)}
+      />
+
+      <ConfirmModal
+        open={confirmDelete}
+        title="Masayı sil"
+        message="Bu masa ve tüm siparişleri silinecek. Bu işlem geri alınamaz."
+        confirmLabel="Sil"
+        destructive
+        onConfirm={() => { setConfirmDelete(false); void handleDelete(); }}
+        onCancel={() => setConfirmDelete(false)}
+      />
+    </div>
+  );
+};
+
+// suppress unused-import warning if toast isn't used in some build
+void toast;

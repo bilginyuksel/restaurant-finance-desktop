@@ -84,6 +84,12 @@ export const TableDetailPage: React.FC = () => {
   // the delta (newly added items + quantity increases) to the kitchen.
   const [edit, setEdit] = useState<EditState | null>(null);
 
+  // Preserve the originating group tab so back-navigation returns to the same filter.
+  const backTo = useMemo(() => {
+    const g = table?.group;
+    return g ? `/tables?group=${encodeURIComponent(g)}` : '/tables';
+  }, [table?.group]);
+
   useEffect(() => {
     if (tables.length > 0 && !table && !isPreset) {
       toastError('Masa bulunamadı');
@@ -591,7 +597,7 @@ export const TableDetailPage: React.FC = () => {
       setPaymentOpen(false);
       if (fullyPaid) {
         toastSuccess('Masa tamamen ödendi ve kapatıldı');
-        navigate('/tables');
+        navigate(backTo);
       } else {
         const remaining = Math.max(0, totalAfter - grossPaidAfter);
         toastSuccess(`${formatCurrency(tx.amount)} tahsil edildi · Kalan ${formatCurrency(remaining)}`);
@@ -613,7 +619,7 @@ export const TableDetailPage: React.FC = () => {
     try {
       await updateTable(next);
       toastSuccess('Masa kapatıldı');
-      navigate('/tables');
+      navigate(backTo);
     } catch (err) {
       console.error(err);
       toastError('Masa kapatılamadı');
@@ -628,7 +634,7 @@ export const TableDetailPage: React.FC = () => {
     }
     try {
       await deleteTable(table.id);
-      navigate('/tables');
+      navigate(backTo);
     } catch (err) {
       console.error(err);
       toastError('Masa silinemedi');
@@ -647,7 +653,7 @@ export const TableDetailPage: React.FC = () => {
   useHotkeys('p', () => void printCustomerBill(), { enableOnFormTags: false });
   useHotkeys('escape', () => {
     if (edit) cancelEdit();
-    else navigate('/tables');
+    else navigate(backTo);
   });
 
   if (!table) return <div className="empty-state">Yükleniyor…</div>;
@@ -890,7 +896,7 @@ export const TableDetailPage: React.FC = () => {
     <div className="detail-split-3">
       <div className="detail-main">
         <div className="flex-row">
-          <button className="btn small" onClick={() => navigate('/tables')}>← Geri</button>
+          <button className="btn small" onClick={() => navigate(backTo)}>← Geri</button>
           <h2 style={{ margin: 0 }}>Masa {table.name}</h2>
           <span className="muted">({table.orders?.length ?? 0} sipariş)</span>
           <div className="spacer" />

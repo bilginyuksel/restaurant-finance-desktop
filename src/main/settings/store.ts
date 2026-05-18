@@ -32,7 +32,7 @@ const store = new Store<Schema>({
     },
     extraPrinters: {},
     categoryRouting: {},
-    restaurantId: 'restaurant-2',
+    restaurantId: 'restaurant-1',
   },
 });
 

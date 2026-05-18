@@ -31,6 +31,7 @@ export const db = initializeFirestore(app, {
   // leaving the client stuck in "fromCache" / "syncing" forever. Long-polling is
   // the reliable transport for desktop apps.
   experimentalForceLongPolling: true,
+  ignoreUndefinedProperties: true,
 });
 
 export const auth = initializeAuth(app, {

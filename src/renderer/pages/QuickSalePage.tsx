@@ -3,7 +3,17 @@ import { useFinance } from '../context/FinanceContext';
 import { ItemGrid } from '../components/ItemGrid';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { toastError, toastSuccess } from '../components/Toast';
-import { Recipe, Table, TableItem } from '../../shared/types';
+import { Recipe, Table, TableItem, SelectedVariation } from '../../shared/types';
+import { VariationModal } from '../components/VariationModal';
+
+const variationsKey = (v?: SelectedVariation[]) => {
+  if (!v || v.length === 0) return '';
+  const sorted = [...v].sort((a, b) => a.groupId.localeCompare(b.groupId)).map(x => ({
+    ...x,
+    optionIds: [...x.optionIds].sort()
+  }));
+  return JSON.stringify(sorted);
+};
 import { formatCurrency, CURRENCY } from '../utils/currency';
 import { itemLineTotal, itemPrice, recipeUnitLabel, tableTotalFromOrders } from '../utils/totals';
 import { ReceiptLineItem, ReceiptPayload } from '../../shared/receipt';
@@ -23,32 +33,35 @@ const buildLineItems = (basket: TableItem[], recipes: Recipe[]): ReceiptLineItem
     unitLabel: recipeUnitLabel(it.recipeId, recipes) === 'kg' ? 'g' : undefined,
     unitPrice: itemPrice(it, recipes),
     lineTotal: itemLineTotal(it, recipes),
+    variations: it.selectedVariations?.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`),
   }));
 
 export const QuickSalePage: React.FC = () => {
   const { recipes, categories, user, addTable } = useFinance();
   const [basket, setBasket] = useState<TableItem[]>([]);
-  const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string } | null>(null);
+  const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string, variations?: SelectedVariation[] } | null>(null);
+  const [variationModal, setVariationModal] = useState<{ recipe: Recipe } | null>(null);
   const [paying, setPaying] = useState(false);
 
   const total = basket.reduce((s, it) => s + itemLineTotal(it, recipes), 0);
 
   // ---- basket helpers ----
-  const addToBasket = (recipe: Recipe, qty: number) => {
+  const addToBasket = (recipe: Recipe, qty: number, selectedVariations?: SelectedVariation[]) => {
     setBasket((b) => {
       if (recipe.pricingType === 'by_weight') {
         return [
           ...b,
-          { recipeId: recipe.id, quantity: qty, price: recipe.price, productSnapshot: recipe },
+          { recipeId: recipe.id, quantity: qty, price: recipe.price, productSnapshot: recipe, selectedVariations },
         ];
       }
-      const idx = b.findIndex((it) => it.recipeId === recipe.id);
+      const vKey = variationsKey(selectedVariations);
+      const idx = b.findIndex((it) => it.recipeId === recipe.id && variationsKey(it.selectedVariations) === vKey);
       if (idx >= 0) {
         const copy = [...b];
         copy[idx] = { ...copy[idx], quantity: copy[idx].quantity + qty };
         return copy;
       }
-      return [...b, { recipeId: recipe.id, quantity: qty, price: recipe.price, productSnapshot: recipe }];
+      return [...b, { recipeId: recipe.id, quantity: qty, price: recipe.price, productSnapshot: recipe, selectedVariations }];
     });
   };
 
@@ -63,11 +76,26 @@ export const QuickSalePage: React.FC = () => {
   };
 
   const handlePickRecipe = (recipe: Recipe) => {
+    if (recipe.variationGroups && recipe.variationGroups.length > 0) {
+      setVariationModal({ recipe });
+      return;
+    }
     if (recipe.pricingType === 'by_weight') {
       setWeightModal({ recipe, value: '' });
       return;
     }
     addToBasket(recipe, 1);
+  };
+
+  const confirmVariation = (variations: SelectedVariation[]) => {
+    if (!variationModal) return;
+    const { recipe } = variationModal;
+    setVariationModal(null);
+    if (recipe.pricingType === 'by_weight') {
+      setWeightModal({ recipe, value: '', variations });
+      return;
+    }
+    addToBasket(recipe, 1, variations);
   };
 
   const confirmWeight = () => {
@@ -77,7 +105,7 @@ export const QuickSalePage: React.FC = () => {
       toastError('Geçerli bir ağırlık girin (kg, örn: 0,452)');
       return;
     }
-    addToBasket(weightModal.recipe, kg);
+    addToBasket(weightModal.recipe, kg, weightModal.variations);
     setWeightModal(null);
   };
 
@@ -189,7 +217,14 @@ export const QuickSalePage: React.FC = () => {
                         <span className="qty">{qtyDisplay}</span>
                       )}
                     </div>
-                    <div className="name">{recipeName(it.recipeId, recipes)}</div>
+                    <div className="name">
+                      {recipeName(it.recipeId, recipes)}
+                      {it.selectedVariations && it.selectedVariations.length > 0 && (
+                        <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
+                          {it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')}
+                        </div>
+                      )}
+                    </div>
                     <div className="price">{formatCurrency(itemLineTotal(it, recipes))}</div>
                     {unit === 'kg' && (
                       <button
@@ -263,6 +298,14 @@ export const QuickSalePage: React.FC = () => {
           Birim fiyat: {weightModal ? formatCurrency(weightModal.recipe.price) : ''} / kg
         </div>
       </ConfirmModal>
+
+      {variationModal && (
+        <VariationModal
+          recipe={variationModal.recipe}
+          onConfirm={confirmVariation}
+          onCancel={() => setVariationModal(null)}
+        />
+      )}
     </div>
   );
 };

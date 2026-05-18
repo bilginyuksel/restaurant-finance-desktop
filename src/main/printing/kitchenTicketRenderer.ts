@@ -32,6 +32,11 @@ export function renderKitchenTicket(p: ThermalPrinter, r: ReceiptPayload): void 
       if (item.note) {
         p.println(s(`   * ${item.note}`));
       }
+      if (item.variations?.length) {
+        for (const v of item.variations) {
+          p.println(s(`   - ${v}`));
+        }
+      }
       p.drawLine();
       p.bold(false);
       continue;
@@ -44,6 +49,11 @@ export function renderKitchenTicket(p: ThermalPrinter, r: ReceiptPayload): void 
     p.setTextNormal();
     if (item.note) {
       p.println(s(`   * ${item.note}`));
+    }
+    if (item.variations?.length) {
+      for (const v of item.variations) {
+        p.println(s(`   - ${v}`));
+      }
     }
   }
 

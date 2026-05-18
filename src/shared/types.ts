@@ -56,6 +56,26 @@ export interface RecipeIngredient {
   unit: Unit;
 }
 
+export interface VariationOption {
+  id: string;
+  name: string;
+}
+
+export interface VariationGroup {
+  id: string;
+  label: string;
+  mode: 'single' | 'multi';
+  required?: boolean;
+  options: VariationOption[];
+}
+
+export interface SelectedVariation {
+  groupId: string;
+  groupLabel: string;
+  optionIds: string[];
+  optionNames: string[];
+}
+
 export interface Recipe extends BaseResource {
   id: string;
   name: string;
@@ -63,6 +83,7 @@ export interface Recipe extends BaseResource {
   category?: string;
   pricingType?: 'fixed' | 'by_weight';
   ingredients: RecipeIngredient[];
+  variationGroups?: VariationGroup[];
 }
 
 export interface DailySaleItem {
@@ -88,6 +109,7 @@ export interface TableItem extends BaseResource {
   price?: number;
   cost?: number;
   productSnapshot?: Recipe;
+  selectedVariations?: SelectedVariation[];
 }
 
 export interface TableOrder extends BaseResource {

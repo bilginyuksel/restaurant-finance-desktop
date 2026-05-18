@@ -7,6 +7,7 @@ export interface ReceiptLineItem {
   note?: string;
   /** When true the line represents a cancelled/removed item from an edited order. */
   cancelled?: boolean;
+  variations?: string[];
 }
 
 export interface ReceiptPayload {

@@ -5,7 +5,8 @@ import { ItemGrid } from '../components/ItemGrid';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { PaymentModal, PaymentPayload } from '../components/PaymentModal';
 import { toast, toastError, toastSuccess } from '../components/Toast';
-import { Recipe, Table, TableItem, TableOrder, Transaction } from '../../shared/types';
+import { Recipe, Table, TableItem, TableOrder, Transaction, SelectedVariation } from '../../shared/types';
+import { VariationModal } from '../components/VariationModal';
 import { formatCurrency, CURRENCY } from '../utils/currency';
 import {
   itemLineTotal,
@@ -24,6 +25,16 @@ const newId = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}_${Math.ra
 // and flags lines added during this edit session, so we can compute & print the kitchen delta on save.
 type EditItem = TableItem & { _origQty?: number; _isNew?: boolean };
 type EditState = { orderId: string; items: EditItem[] };
+
+
+const variationsKey = (v?: SelectedVariation[]) => {
+  if (!v || v.length === 0) return '';
+  const sorted = [...v].sort((a, b) => a.groupId.localeCompare(b.groupId)).map(x => ({
+    ...x,
+    optionIds: [...x.optionIds].sort()
+  }));
+  return JSON.stringify(sorted);
+};
 
 export const TableDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -82,7 +93,8 @@ export const TableDetailPage: React.FC = () => {
     [tables, id, draftTable, presetTable],
   );
   const [basket, setBasket] = useState<TableItem[]>([]);
-  const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string; target: 'basket' | 'edit' } | null>(null);
+  const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string; target: 'basket' | 'edit', variations?: SelectedVariation[] } | null>(null);
+  const [variationModal, setVariationModal] = useState<{ recipe: Recipe; target: 'basket' | 'edit' } | null>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [prepayConfirm, setPrepayConfirm] = useState(false);
@@ -180,7 +192,7 @@ export const TableDetailPage: React.FC = () => {
     });
   };
 
-  const editAdd = (recipe: Recipe, qty: number) => {
+  const editAdd = (recipe: Recipe, qty: number, selectedVariations?: SelectedVariation[]) => {
     setEdit((e) => {
       if (!e) return e;
       // For weight-based, always add a new line so weights don't merge unintuitively.
@@ -196,12 +208,14 @@ export const TableDetailPage: React.FC = () => {
               productSnapshot: recipe,
               paymentStatus: 'pending',
               _isNew: true,
+              selectedVariations,
             },
           ],
         };
       }
       // Merge into an existing freshly-added line of the same recipe, if any.
-      const idx = e.items.findIndex((it) => it._isNew && it.recipeId === recipe.id);
+      const vKey = variationsKey(selectedVariations);
+      const idx = e.items.findIndex((it) => it._isNew && it.recipeId === recipe.id && variationsKey(it.selectedVariations) === vKey);
       if (idx >= 0) {
         const items = [...e.items];
         items[idx] = { ...items[idx], quantity: items[idx].quantity + qty };
@@ -218,6 +232,7 @@ export const TableDetailPage: React.FC = () => {
             productSnapshot: recipe,
             paymentStatus: 'pending',
             _isNew: true,
+            selectedVariations,
           },
         ],
       };
@@ -259,17 +274,19 @@ export const TableDetailPage: React.FC = () => {
     if (originalOrder) {
       const originalByRecipe = new Map<string, { qty: number; sample: TableItem }>();
       for (const it of originalOrder.items) {
-        const cur = originalByRecipe.get(it.recipeId);
+        const key = it.recipeId + '_' + variationsKey(it.selectedVariations);
+        const cur = originalByRecipe.get(key);
         if (cur) cur.qty += it.quantity;
-        else originalByRecipe.set(it.recipeId, { qty: it.quantity, sample: it });
+        else originalByRecipe.set(key, { qty: it.quantity, sample: it });
       }
       const remainingByRecipe = new Map<string, number>();
       for (const it of edit.items) {
         if (it._isNew) continue;
-        remainingByRecipe.set(it.recipeId, (remainingByRecipe.get(it.recipeId) ?? 0) + it.quantity);
+        const key = it.recipeId + '_' + variationsKey(it.selectedVariations);
+        remainingByRecipe.set(key, (remainingByRecipe.get(key) ?? 0) + it.quantity);
       }
-      for (const [recipeId, { qty: origQty, sample }] of originalByRecipe) {
-        const remaining = remainingByRecipe.get(recipeId) ?? 0;
+      for (const [key, { qty: origQty, sample }] of originalByRecipe) {
+        const remaining = remainingByRecipe.get(key) ?? 0;
         const cancelledQty = +(origQty - remaining).toFixed(6);
         if (cancelledQty > 0) {
           cancelledItems.push({ ...sample, quantity: cancelledQty });
@@ -325,7 +342,7 @@ export const TableDetailPage: React.FC = () => {
   });
 
   // ---------- basket management ----------
-  const addToBasket = (recipe: Recipe, qty: number) => {
+  const addToBasket = (recipe: Recipe, qty: number, selectedVariations?: SelectedVariation[]) => {
     setBasket((b) => {
       // For weight-based, always add a new line so weights don't merge unintuitively.
       if (recipe.pricingType === 'by_weight') {
@@ -336,10 +353,12 @@ export const TableDetailPage: React.FC = () => {
             quantity: qty,
             price: recipe.price * qty / qty, // unit price (per kg)
             productSnapshot: recipe,
+            selectedVariations,
           },
         ];
       }
-      const idx = b.findIndex((it) => it.recipeId === recipe.id);
+      const vKey = variationsKey(selectedVariations);
+      const idx = b.findIndex((it) => it.recipeId === recipe.id && variationsKey(it.selectedVariations) === vKey);
       if (idx >= 0) {
         const copy = [...b];
         copy[idx] = { ...copy[idx], quantity: copy[idx].quantity + qty };
@@ -352,19 +371,37 @@ export const TableDetailPage: React.FC = () => {
           quantity: qty,
           price: recipe.price,
           productSnapshot: recipe,
+          selectedVariations,
         },
       ];
     });
   };
 
+  
   const handlePickRecipe = (recipe: Recipe) => {
     const target: 'basket' | 'edit' = edit ? 'edit' : 'basket';
+    if (recipe.variationGroups && recipe.variationGroups.length > 0) {
+      setVariationModal({ recipe, target });
+      return;
+    }
     if (recipe.pricingType === 'by_weight') {
       setWeightModal({ recipe, value: '', target });
       return;
     }
     if (target === 'edit') editAdd(recipe, 1);
     else addToBasket(recipe, 1);
+  };
+
+  const confirmVariation = (variations: SelectedVariation[]) => {
+    if (!variationModal) return;
+    const { recipe, target } = variationModal;
+    setVariationModal(null);
+    if (recipe.pricingType === 'by_weight') {
+      setWeightModal({ recipe, value: '', target, variations });
+      return;
+    }
+    if (target === 'edit') editAdd(recipe, 1, variations);
+    else addToBasket(recipe, 1, variations);
   };
 
   const confirmWeight = () => {
@@ -374,8 +411,8 @@ export const TableDetailPage: React.FC = () => {
       toastError('Geçerli bir ağırlık girin (kg, örn: 0,452)');
       return;
     }
-    if (weightModal.target === 'edit') editAdd(weightModal.recipe, kg);
-    else addToBasket(weightModal.recipe, kg);
+    if (weightModal.target === 'edit') editAdd(weightModal.recipe, kg, weightModal.variations);
+    else addToBasket(weightModal.recipe, kg, weightModal.variations);
     setWeightModal(null);
   };
 
@@ -451,6 +488,7 @@ export const TableDetailPage: React.FC = () => {
       unitPrice: itemPrice(it, recipes),
       lineTotal: itemLineTotal(it, recipes),
       cancelled: it._cancelled || undefined,
+      variations: it.selectedVariations?.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`),
     }));
 
   const printKitchen = async (
@@ -1027,6 +1065,11 @@ export const TableDetailPage: React.FC = () => {
                         {increased && <span className="row-tag inc"> +{it.quantity - (it._origQty ?? 0)}</span>}
                         {decreased && <span className="row-tag dec"> −{(it._origQty ?? 0) - it.quantity}</span>}
                         {locked && <span className="row-tag paid"> ödendi</span>}
+                        {it.selectedVariations && it.selectedVariations.length > 0 && (
+                          <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
+                            {it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')}
+                          </div>
+                        )}
                       </div>
                       <div className="price">{formatCurrency(itemLineTotal(it, recipes))}</div>
                       {!locked && (canRemoveItems || it._isNew) && (
@@ -1078,7 +1121,14 @@ export const TableDetailPage: React.FC = () => {
                         )}
                         {unit === 'kg' && <span className="qty">{qtyDisplay}</span>}
                       </div>
-                      <div className="name">{recipeName(it.recipeId, recipes)}</div>
+                      <div className="name">
+                        {recipeName(it.recipeId, recipes)}
+                        {it.selectedVariations && it.selectedVariations.length > 0 && (
+                          <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
+                            {it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')}
+                          </div>
+                        )}
+                      </div>
                       <div className="price">{formatCurrency(itemLineTotal(it, recipes))}</div>
                       {unit === 'kg' && (
                         <button className="btn small danger" onClick={() => incBasket(idx, -it.quantity)}>×</button>
@@ -1205,8 +1255,17 @@ export const TableDetailPage: React.FC = () => {
         onConfirm={() => { setConfirmDelete(false); void handleDelete(); }}
         onCancel={() => setConfirmDelete(false)}
       />
+
+      {variationModal && (
+        <VariationModal
+          recipe={variationModal.recipe}
+          onConfirm={confirmVariation}
+          onCancel={() => setVariationModal(null)}
+        />
+      )}
     </div>
   );
+
 };
 
 // suppress unused-import warning if toast isn't used in some build

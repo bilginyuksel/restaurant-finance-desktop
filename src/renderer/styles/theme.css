@@ -94,6 +94,19 @@ input, textarea { font-family: inherit; }
 .online-badge.online .dot { background: var(--accent); }
 .online-badge.offline .dot { background: var(--danger); }
 .online-badge.syncing .dot { background: var(--warn); animation: pulse 1s infinite; }
+.online-badge.error .dot { background: var(--danger); animation: pulse 1s infinite; }
+.online-badge-retry {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 0 2px;
+  line-height: 1;
+  opacity: 0.8;
+}
+.online-badge-retry:hover { opacity: 1; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
 /* Buttons */

@@ -1,7 +1,9 @@
 import React, { createContext, ReactNode, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   collection,
+  disableNetwork,
   doc,
+  enableNetwork,
   onSnapshot,
   query,
   setDoc,
@@ -42,7 +44,12 @@ interface FinanceContextType {
 
   isOnline: boolean;
   hasPendingWrites: boolean;
-  fromCache: boolean;
+  // True once every Firestore collection listener has received at least one
+  // server-confirmed (non-cache) snapshot. Used to show a "syncing" badge on
+  // cold start without false-positives from fromCache on connected clients.
+  initialSyncDone: boolean;
+  syncStuck: boolean;
+  retryConnection: () => Promise<void>;
 
   addTable: (table: Table) => Promise<void>;
   updateTable: (table: Table) => Promise<void>;
@@ -81,7 +88,10 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
 
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [hasPendingWrites, setHasPendingWrites] = useState(false);
-  const [fromCache, setFromCache] = useState(false);
+  const [initialSyncDone, setInitialSyncDone] = useState(false);
+  const [syncStuck, setSyncStuck] = useState(false);
+
+  const syncStuckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const on = () => setIsOnline(true);
@@ -93,6 +103,32 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       window.removeEventListener('offline', off);
     };
   }, []);
+
+  // Detect when initial sync is taking too long (Firestore long-poll stuck).
+  // Only relevant before initialSyncDone; once the server has confirmed all
+  // collections at least once, we never show a stuck state again.
+  useEffect(() => {
+    if (isOnline && !initialSyncDone) {
+      if (!syncStuckTimerRef.current) {
+        syncStuckTimerRef.current = setTimeout(() => {
+          syncStuckTimerRef.current = null;
+          setSyncStuck(true);
+        }, 15000);
+      }
+    } else {
+      if (syncStuckTimerRef.current) {
+        clearTimeout(syncStuckTimerRef.current);
+        syncStuckTimerRef.current = null;
+      }
+      setSyncStuck(false);
+    }
+    return () => {
+      if (syncStuckTimerRef.current) {
+        clearTimeout(syncStuckTimerRef.current);
+        syncStuckTimerRef.current = null;
+      }
+    };
+  }, [isOnline, initialSyncDone]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
@@ -124,21 +160,23 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
+    setInitialSyncDone(false);
+
     const unsubscribers: Unsubscribe[] = [];
-    // Aggregate pending-write / fromCache state across listeners
     const writeFlags: Record<string, boolean> = {};
-    const cacheFlags: Record<string, boolean> = {};
+    // The four collections whose server confirmation we wait for.
+    const EXPECTED_KEYS = ['recipes', 'tables', 'tableGroups', 'categories'] as const;
+    const serverConfirmed = new Set<string>();
+
     const update = (key: string, snapshot: { metadata: { hasPendingWrites: boolean; fromCache: boolean } }) => {
       writeFlags[key] = snapshot.metadata.hasPendingWrites;
-      cacheFlags[key] = snapshot.metadata.fromCache;
-      // Diagnostic: log every listener's sync state so we can see which one is stuck offline.
-      console.log('[firestore-sync]', key, {
-        fromCache: snapshot.metadata.fromCache,
-        hasPendingWrites: snapshot.metadata.hasPendingWrites,
-        allCacheFlags: { ...cacheFlags },
-      });
+      if (!snapshot.metadata.fromCache) {
+        serverConfirmed.add(key);
+        if (EXPECTED_KEYS.every((k) => serverConfirmed.has(k))) {
+          setInitialSyncDone(true);
+        }
+      }
       setHasPendingWrites(Object.values(writeFlags).some(Boolean));
-      setFromCache(Object.values(cacheFlags).some(Boolean));
     };
 
     const subscribe = <T,>(
@@ -146,8 +184,13 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       setter: (data: T[]) => void,
     ) => {
       const q = query(collection(db, 'restaurants', restaurantId, colName));
+      // includeMetadataChanges: true is required so we receive the metadata-only
+      // event when a listener transitions from cache to server-confirmed. Without
+      // it Firestore suppresses callbacks when the server data equals the cache,
+      // and initialSyncDone would never flip to true on an unchanged collection.
       const u = onSnapshot(
         q,
+        { includeMetadataChanges: true },
         (snapshot) => {
           const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as T[];
           setter(data);
@@ -168,6 +211,7 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     unsubscribers.push(
       onSnapshot(
         catQ,
+        { includeMetadataChanges: true },
         (snapshot) => {
           setCategories(snapshot.docs.map((d) => d.id));
           update('categories', snapshot);
@@ -276,6 +320,22 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     setTableLayoutState(layout);
   };
 
+  // Force Firestore to drop and re-establish its long-poll connection. Call
+  // this when syncStuck is true to escape a permanently stalled transport.
+  const retryConnection = async () => {
+    setSyncStuck(false);
+    if (syncStuckTimerRef.current) {
+      clearTimeout(syncStuckTimerRef.current);
+      syncStuckTimerRef.current = null;
+    }
+    try {
+      await disableNetwork(db);
+      await enableNetwork(db);
+    } catch (err) {
+      console.error('[firestore] retryConnection failed', err);
+    }
+  };
+
   // updateDoc is imported but unused at top-level; keep reference to avoid tree-shake noise.
   void updateDoc;
 
@@ -301,7 +361,9 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
         tableLayout,
         isOnline,
         hasPendingWrites,
-        fromCache,
+        initialSyncDone,
+        syncStuck,
+        retryConnection,
         addTable,
         updateTable,
         deleteTable,

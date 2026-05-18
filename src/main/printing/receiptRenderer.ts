@@ -1,5 +1,5 @@
 import { ThermalPrinter } from 'node-thermal-printer';
-import { ReceiptPayload } from '../../shared/receipt';
+import { ReceiptPayload, ReceiptLineItem } from '../../shared/receipt';
 import { sanitizeForPrinter, formatMoney } from './textSanitize';
 
 const money = (n: number, currency: string) => formatMoney(n, currency);
@@ -29,7 +29,19 @@ export function renderCustomerBill(p: ThermalPrinter, r: ReceiptPayload): void {
   ]);
   p.drawLine();
 
+  const groupedItems = new Map<string, ReceiptLineItem>();
   for (const item of r.items) {
+    const key = `${item.name}|${item.unitLabel || ''}|${item.unitPrice}`;
+    const existing = groupedItems.get(key);
+    if (existing) {
+      existing.quantity += item.quantity;
+      existing.lineTotal += item.lineTotal;
+    } else {
+      groupedItems.set(key, { ...item });
+    }
+  }
+
+  for (const item of groupedItems.values()) {
     const qty = item.unitLabel ? `${item.quantity}${item.unitLabel}` : `${item.quantity}`;
     p.tableCustom([
       { text: s(qty), align: 'LEFT', width: 0.12 },

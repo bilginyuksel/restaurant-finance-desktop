@@ -20,6 +20,9 @@ import {
   TableGroup,
   TableLayout,
   UserProfile as UserProfileType,
+  Warehouse,
+  Stock,
+  StockMovement,
 } from '../../shared/types';
 
 interface FinanceContextType {
@@ -38,6 +41,9 @@ interface FinanceContextType {
   categories: string[];
   tables: Table[];
   tableGroups: TableGroup[];
+  warehouses: Warehouse[];
+  stocks: Stock[];
+  defaultWarehouseId: string | null;
 
   staffPermissions: StaffPermissions | null;
   tableLayout: TableLayout | null;
@@ -55,8 +61,18 @@ interface FinanceContextType {
   updateTable: (table: Table) => Promise<void>;
   deleteTable: (id: string) => Promise<void>;
   addTableGroup: (group: TableGroup) => Promise<void>;
+  updateTableGroup: (group: TableGroup) => Promise<void>;
   deleteTableGroup: (id: string) => Promise<void>;
   setTableLayout: (layout: TableLayout) => Promise<void>;
+
+  addWarehouse: (warehouse: Warehouse) => Promise<void>;
+  updateWarehouse: (warehouse: Warehouse) => Promise<void>;
+  deleteWarehouse: (id: string) => Promise<void>;
+
+  addStock: (stock: Stock) => Promise<void>;
+  updateStock: (stock: Stock) => Promise<void>;
+  deleteStock: (id: string) => Promise<void>;
+  recordStockMovement: (movement: StockMovement) => Promise<void>;
 }
 
 const defaultPermissions: StaffPermissions = {
@@ -79,6 +95,9 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
   const [categories, setCategories] = useState<string[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
   const [tableGroups, setTableGroups] = useState<TableGroup[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [stocks, setStocks] = useState<Stock[]>([]);
+  const [defaultWarehouseId, setDefaultWarehouseId] = useState<string | null>(null);
   const [staffPermissions, setStaffPermissions] = useState<StaffPermissions | null>(null);
   const [tableLayout, setTableLayoutState] = useState<TableLayout | null>(null);
 
@@ -135,12 +154,12 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       setUser(u);
       setAuthReady(true);
       if (u) {
-        // Resolve restaurantId from persisted settings (defaults to "restaurant-1" matching mobile).
+        // Resolve restaurantId from persisted settings (defaults to "restaurant-2" matching mobile).
         try {
           const rid = await window.api.getRestaurantId();
-          setRestaurantId(rid || 'restaurant-1');
+          setRestaurantId(rid || 'restaurant-2');
         } catch {
-          setRestaurantId('restaurant-1');
+          setRestaurantId('restaurant-2');
         }
       } else {
         setRestaurantId(null);
@@ -156,6 +175,9 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       setCategories([]);
       setTables([]);
       setTableGroups([]);
+      setWarehouses([]);
+      setStocks([]);
+      setDefaultWarehouseId(null);
       setStaffPermissions(null);
       return;
     }
@@ -164,8 +186,8 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
 
     const unsubscribers: Unsubscribe[] = [];
     const writeFlags: Record<string, boolean> = {};
-    // The four collections whose server confirmation we wait for.
-    const EXPECTED_KEYS = ['recipes', 'tables', 'tableGroups', 'categories'] as const;
+    // The collections whose server confirmation we wait for.
+    const EXPECTED_KEYS = ['recipes', 'tables', 'tableGroups', 'categories', 'warehouses', 'stocks'] as const;
     const serverConfirmed = new Set<string>();
 
     const update = (key: string, snapshot: { metadata: { hasPendingWrites: boolean; fromCache: boolean } }) => {
@@ -203,6 +225,8 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
 
     subscribe<Recipe>('recipes', setRecipes);
     subscribe<Table>('tables', setTables);
+    subscribe<Warehouse>('warehouses', setWarehouses);
+    subscribe<Stock>('stocks', setStocks);
     subscribe<TableGroup>('tableGroups', (groups) =>
       setTableGroups([...groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))),
     );
@@ -227,9 +251,11 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
         (snapshot) => {
           if (snapshot.exists()) {
             const data = snapshot.data();
+            setDefaultWarehouseId(data?.defaultWarehouseId ?? null);
             setStaffPermissions(data?.settings?.staffPermissions ?? defaultPermissions);
             setTableLayoutState(data?.settings?.tableLayout ?? null);
           } else {
+            setDefaultWarehouseId(null);
             setStaffPermissions(defaultPermissions);
             setTableLayoutState(null);
           }
@@ -325,6 +351,12 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       .catch((err) => console.error('[addTableGroup] write failed', group.id, err));
   };
 
+  const updateTableGroup = async (group: TableGroup) => {
+    if (!restaurantId || !user) return;
+    await setDoc(doc(db, 'restaurants', restaurantId, 'tableGroups', group.id), group, { merge: true })
+      .catch((err) => console.error('[updateTableGroup] write failed', group.id, err));
+  };
+
   const deleteTableGroup = async (id: string) => {
     if (!restaurantId || !user) return;
     void deleteDoc(doc(db, 'restaurants', restaurantId, 'tableGroups', id))
@@ -337,6 +369,48 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       'settings.tableLayout': layout,
     }).catch((err) => console.error('[setTableLayout] write failed', err));
     setTableLayoutState(layout);
+  };
+
+  const addWarehouse = async (warehouse: Warehouse) => {
+    if (!restaurantId || !user) return;
+    void setDoc(doc(db, 'restaurants', restaurantId, 'warehouses', warehouse.id), { ...warehouse, ...getAuditInfo() })
+      .catch((err) => console.error('[addWarehouse] write failed', warehouse.id, err));
+  };
+
+  const updateWarehouse = async (warehouse: Warehouse) => {
+    if (!restaurantId || !user) return;
+    void updateDoc(doc(db, 'restaurants', restaurantId, 'warehouses', warehouse.id), { ...warehouse })
+      .catch((err) => console.error('[updateWarehouse] write failed', warehouse.id, err));
+  };
+
+  const deleteWarehouse = async (id: string) => {
+    if (!restaurantId || !user) return;
+    void deleteDoc(doc(db, 'restaurants', restaurantId, 'warehouses', id))
+      .catch((err) => console.error('[deleteWarehouse] write failed', id, err));
+  };
+
+  const addStock = async (stock: Stock) => {
+    if (!restaurantId || !user) return;
+    void setDoc(doc(db, 'restaurants', restaurantId, 'stocks', stock.id), { ...stock, ...getAuditInfo() })
+      .catch((err) => console.error('[addStock] write failed', stock.id, err));
+  };
+
+  const updateStock = async (stock: Stock) => {
+    if (!restaurantId || !user) return;
+    void updateDoc(doc(db, 'restaurants', restaurantId, 'stocks', stock.id), { ...stock })
+      .catch((err) => console.error('[updateStock] write failed', stock.id, err));
+  };
+
+  const deleteStock = async (id: string) => {
+    if (!restaurantId || !user) return;
+    void deleteDoc(doc(db, 'restaurants', restaurantId, 'stocks', id))
+      .catch((err) => console.error('[deleteStock] write failed', id, err));
+  };
+
+  const recordStockMovement = async (movement: StockMovement) => {
+    if (!restaurantId || !user) return;
+    void setDoc(doc(db, 'restaurants', restaurantId, 'stockMovements', movement.id), { ...movement, ...getAuditInfo() })
+      .catch((err) => console.error('[recordStockMovement] write failed', movement.id, err));
   };
 
   // Force Firestore to drop and re-establish its long-poll connection. Call
@@ -387,8 +461,19 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
         updateTable,
         deleteTable,
         addTableGroup,
+        updateTableGroup,
         deleteTableGroup,
         setTableLayout,
+        warehouses,
+        stocks,
+        defaultWarehouseId,
+        addWarehouse,
+        updateWarehouse,
+        deleteWarehouse,
+        addStock,
+        updateStock,
+        deleteStock,
+        recordStockMovement,
       }}
     >
       {children}

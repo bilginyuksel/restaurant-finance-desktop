@@ -35,7 +35,7 @@ const store = new Store<Schema>({
     },
     extraPrinters: {},
     categoryRouting: {},
-    restaurantId: 'restaurant-1',
+    restaurantId: 'restaurant-2',
   },
 });
 

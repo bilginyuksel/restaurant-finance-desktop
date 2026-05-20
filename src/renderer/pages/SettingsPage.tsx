@@ -166,7 +166,8 @@ export const SettingsPage: React.FC = () => {
   const [savingTarget, setSavingTarget] = useState<string | null>(null);
   const [newPrinterName, setNewPrinterName] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
-  const { user, categories, tableGroups, addTableGroup, deleteTableGroup, tableLayout, setTableLayout } = useFinance();
+  const [newGroupWarehouseId, setNewGroupWarehouseId] = useState('');
+  const { user, categories, tableGroups, addTableGroup, deleteTableGroup, updateTableGroup, tableLayout, setTableLayout, warehouses } = useFinance();
   const [groupPresets, setGroupPresets] = useState<Record<string, number>>({});
   const [groupPrefixes, setGroupPrefixes] = useState<Record<string, string>>({});
 
@@ -267,8 +268,13 @@ export const SettingsPage: React.FC = () => {
       return;
     }
     const id = slug(name);
-    await addTableGroup({ id, name, order: tableGroups.length });
+    const newGroup: any = { id, name, order: tableGroups.length };
+    if (newGroupWarehouseId) {
+      newGroup.warehouseId = newGroupWarehouseId;
+    }
+    await addTableGroup(newGroup);
     setNewGroupName('');
+    setNewGroupWarehouseId('');
     toastSuccess(`Grup eklendi: ${name}`);
   };
 
@@ -385,7 +391,7 @@ export const SettingsPage: React.FC = () => {
             <button className="btn primary" onClick={saveRestaurant}>Kaydet</button>
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Mobil uygulamadaki ile aynı olmalı. Varsayılan: <code>restaurant-1</code>
+            Mobil uygulamadaki ile aynı olmalı. Varsayılan: <code>restaurant-2</code>
           </div>
         </div>
       </div>
@@ -398,17 +404,29 @@ export const SettingsPage: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
             <div className="flex-row" style={{ gap: 8, fontSize: 12, color: 'var(--text-muted)', paddingBottom: 4 }}>
               <span style={{ flex: 1 }}>Grup</span>
-              <span style={{ width: 140 }}>Ön ek</span>
+              <span style={{ width: 140 }}>Depo Bağlantısı</span>
+              <span style={{ width: 110 }}>Ön ek</span>
               <span style={{ width: 70, textAlign: 'center' }}>Slot</span>
               <span style={{ width: 48 }}></span>
             </div>
             {tableGroups.map((g) => (
               <div key={g.id} className="flex-row" style={{ alignItems: 'center', gap: 8 }}>
                 <span style={{ flex: 1, fontWeight: 600 }}>{g.name}</span>
+                <select
+                  className="input"
+                  style={{ width: 140 }}
+                  value={g.warehouseId ?? ''}
+                  onChange={(e) => updateTableGroup({ ...g, warehouseId: e.target.value || undefined })}
+                >
+                  <option value="">(Varsayılan Depo)</option>
+                  {warehouses.map(w => (
+                    <option key={w.id} value={w.id}>{w.name}</option>
+                  ))}
+                </select>
                 <input
                   className="input"
-                  placeholder={`Ön ek (varsayılan: ${g.name.slice(0, 2).toUpperCase()})`}
-                  style={{ width: 140 }}
+                  placeholder={`Ön ek (${g.name.slice(0, 2).toUpperCase()})`}
+                  style={{ width: 110 }}
                   value={groupPrefixes[g.id] ?? ''}
                   onChange={(e) =>
                     setGroupPrefixes((prev) => ({ ...prev, [g.id]: e.target.value }))
@@ -430,14 +448,26 @@ export const SettingsPage: React.FC = () => {
             ))}
           </div>
         )}
-        <div className="flex-row" style={{ marginBottom: 8 }}>
+        <div className="flex-row" style={{ marginBottom: 8, gap: 8 }}>
           <input
             className="input"
+            style={{ flex: 1 }}
             placeholder="Örn: Havuz, Restoran, Mangal"
             value={newGroupName}
             onChange={(e) => setNewGroupName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') addGroup(); }}
           />
+          <select
+            className="input"
+            style={{ width: 150 }}
+            value={newGroupWarehouseId}
+            onChange={(e) => setNewGroupWarehouseId(e.target.value)}
+          >
+            <option value="">(Varsayılan Depo)</option>
+            {warehouses.map(w => (
+              <option key={w.id} value={w.id}>{w.name}</option>
+            ))}
+          </select>
           <button className="btn primary" onClick={addGroup}>Ekle</button>
         </div>
         {tableGroups.length > 0 && (

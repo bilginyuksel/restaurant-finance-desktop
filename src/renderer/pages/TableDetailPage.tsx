@@ -40,7 +40,7 @@ export const TableDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { tables, recipes, recipesById, categories, updateTable, deleteTable, addTable, user, userProfile, staffPermissions, tableLayout, tableGroups } = useFinance();
+  const { tables, recipes, recipesById, categories, updateTable, deleteTable, addTable, user, userProfile, staffPermissions, tableLayout, tableGroups, warehouses, stocks, defaultWarehouseId, updateStock, recordStockMovement } = useFinance();
 
   // Draft mode: TablesPage navigates here with a pre-generated `t_*` ID and
   // the slot's identity in router state when the user taps a placeholder.
@@ -572,6 +572,40 @@ export const TableDetailPage: React.FC = () => {
   });
 
   // ---------- close / pay ----------
+  const deductTableStock = (tableToDeduct: Table) => {
+    let warehouseToDeduct = defaultWarehouseId || (warehouses.length > 0 ? warehouses[0].id : null);
+    
+    if (tableToDeduct.group) {
+      const group = tableGroups.find(g => g.id === tableToDeduct.group);
+      if (group?.warehouseId) {
+        warehouseToDeduct = group.warehouseId;
+      }
+    }
+
+    if (!warehouseToDeduct) return;
+
+    const allItems = (tableToDeduct.orders ?? []).flatMap((o) => o.items);
+    const productQuantities = allItems.reduce((acc, item) => {
+      acc[item.recipeId] = (acc[item.recipeId] || 0) + item.quantity;
+      return acc;
+    }, {} as Record<string, number>);
+
+    Object.entries(productQuantities).forEach(([productId, qty]) => {
+      const stock = stocks.find((s) => s.productId === productId && s.warehouseId === warehouseToDeduct);
+      if (stock) {
+        updateStock({ ...stock, quantity: stock.quantity - qty });
+        recordStockMovement({
+          id: newId('sm'),
+          warehouseId: warehouseToDeduct,
+          productId,
+          quantityChange: -qty,
+          reason: 'sale',
+          referenceId: tableToDeduct.id,
+        });
+      }
+    });
+  };
+
   // Apply a payment to the table. Supports full, custom amount, or per-item partial payments.
   // When the table's remaining balance reaches 0 the table is auto-closed and the user navigated back.
   const takePayment = (p: PaymentPayload) => runExclusive(async () => {
@@ -672,6 +706,7 @@ export const TableDetailPage: React.FC = () => {
       await updateTable(next);
       setPaymentOpen(false);
       if (fullyPaid) {
+        deductTableStock(next);
         toastSuccess('Masa tamamen ödendi ve kapatıldı');
         navigate(backTo);
       } else {
@@ -694,6 +729,7 @@ export const TableDetailPage: React.FC = () => {
     };
     try {
       await updateTable(next);
+      deductTableStock(next);
       toastSuccess('Masa kapatıldı');
       navigate(backTo);
     } catch (err) {
@@ -839,7 +875,14 @@ export const TableDetailPage: React.FC = () => {
                     return (
                       <div key={i} className={`order-item${it.paymentStatus === 'paid' ? ' paid' : ''}`}>
                         <div className="order-item-main">
-                          <span className="order-item-name">{qty} {recipeName(it.recipeId, recipesById)}</span>
+                          <div>
+                            <span className="order-item-name">{qty} {recipeName(it.recipeId, recipesById)}</span>
+                          </div>
+                          {it.selectedVariations && it.selectedVariations.length > 0 && (
+                            <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
+                              {it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')}
+                            </div>
+                          )}
                           {canSeePrices && (
                             <span className="order-item-price">{formatCurrency(itemLineTotal(it, recipesById))}</span>
                           )}
@@ -1051,7 +1094,14 @@ export const TableDetailPage: React.FC = () => {
                   return (
                     <div key={i} className={`order-item${paidItem ? ' paid' : ''}`}>
                       <div className="order-item-main">
-                        <span className="order-item-name">{qty} {recipeName(it.recipeId, recipes)}</span>
+                        <div>
+                          <span className="order-item-name">{qty} {recipeName(it.recipeId, recipes)}</span>
+                        </div>
+                        {it.selectedVariations && it.selectedVariations.length > 0 && (
+                          <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
+                            {it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')}
+                          </div>
+                        )}
                         <span className="order-item-price">{formatCurrency(itemLineTotal(it, recipes))}</span>
                       </div>
                       {paidItem && <span className="order-item-paid muted">ödendi</span>}
@@ -1173,7 +1223,7 @@ export const TableDetailPage: React.FC = () => {
                         {unit === 'kg' && <span className="qty">{qtyDisplay}</span>}
                       </div>
                       <div className="name">
-                        {recipeName(it.recipeId, recipes)}
+                        <div>{recipeName(it.recipeId, recipes)}</div>
                         {it.selectedVariations && it.selectedVariations.length > 0 && (
                           <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
                             {it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')}

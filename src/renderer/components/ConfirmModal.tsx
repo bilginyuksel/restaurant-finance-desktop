@@ -10,6 +10,7 @@ interface Props {
   onConfirm: () => void;
   onCancel: () => void;
   children?: React.ReactNode;
+  confirmDisabled?: boolean;
 }
 
 export const ConfirmModal: React.FC<Props> = ({
@@ -22,6 +23,7 @@ export const ConfirmModal: React.FC<Props> = ({
   onConfirm,
   onCancel,
   children,
+  confirmDisabled = false,
 }) => {
   if (!open) return null;
   return (
@@ -32,7 +34,7 @@ export const ConfirmModal: React.FC<Props> = ({
         {children}
         <div className="modal-actions">
           <button className="btn" onClick={onCancel}>{cancelLabel}</button>
-          <button className={`btn ${destructive ? 'danger' : 'primary'}`} onClick={onConfirm}>
+          <button className={`btn ${destructive ? 'danger' : 'primary'}`} onClick={onConfirm} disabled={confirmDisabled}>
             {confirmLabel}
           </button>
         </div>

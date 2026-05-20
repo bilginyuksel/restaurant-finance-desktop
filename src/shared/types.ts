@@ -31,6 +31,7 @@ export interface Restaurant {
   name: string;
   ownerId: string;
   currency: string;
+  defaultWarehouseId?: string;
   settings?: {
     staffPermissions: StaffPermissions;
     tableLayout?: TableLayout;
@@ -41,6 +42,28 @@ export interface BaseResource {
   createdBy?: string;
   createdAt?: number;
   createdByName?: string;
+}
+
+export interface Warehouse extends BaseResource {
+  id: string;
+  name: string;
+}
+
+export interface Stock extends BaseResource {
+  id: string;
+  warehouseId: string;
+  productId: string; // Refers to Recipe.id
+  quantity: number;
+  lastUpdated?: string; // ISO timestamp of the last manual or automatic adjustment
+}
+
+export interface StockMovement extends BaseResource {
+  id: string;
+  warehouseId: string;
+  productId: string;
+  quantityChange: number; // positive for add, negative for sale
+  reason: 'manual' | 'sale' | 'waste' | 'transfer';
+  referenceId?: string; // e.g. Table ID or Quick Sale ID
 }
 
 export interface Ingredient extends BaseResource {
@@ -84,6 +107,7 @@ export interface Recipe extends BaseResource {
   pricingType?: 'fixed' | 'by_weight';
   ingredients: RecipeIngredient[];
   variationGroups?: VariationGroup[];
+  trackStock?: boolean;
 }
 
 export interface DailySaleItem {
@@ -172,6 +196,7 @@ export interface TableGroup {
   id: string;
   name: string;
   order?: number;
+  warehouseId?: string;
 }
 
 export interface Table {

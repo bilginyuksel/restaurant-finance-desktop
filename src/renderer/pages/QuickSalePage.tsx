@@ -37,7 +37,7 @@ const buildLineItems = (basket: TableItem[], recipes: Recipe[]): ReceiptLineItem
   }));
 
 export const QuickSalePage: React.FC = () => {
-  const { recipes, categories, user, addTable } = useFinance();
+  const { recipes, categories, user, addTable, warehouses, stocks, defaultWarehouseId, updateStock, recordStockMovement } = useFinance();
   const [basket, setBasket] = useState<TableItem[]>([]);
   const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string, variations?: SelectedVariation[] } | null>(null);
   const [variationModal, setVariationModal] = useState<{ recipe: Recipe } | null>(null);
@@ -112,6 +112,31 @@ export const QuickSalePage: React.FC = () => {
   };
 
   // ---- payment ----
+  const deductStock = () => {
+    const warehouseToDeduct = defaultWarehouseId || (warehouses.length > 0 ? warehouses[0].id : null);
+    if (!warehouseToDeduct) return;
+
+    const productQuantities = basket.reduce((acc, item) => {
+      acc[item.recipeId] = (acc[item.recipeId] || 0) + item.quantity;
+      return acc;
+    }, {} as Record<string, number>);
+
+    Object.entries(productQuantities).forEach(([productId, qty]) => {
+      const stock = stocks.find((s) => s.productId === productId && s.warehouseId === warehouseToDeduct);
+      if (stock) {
+        updateStock({ ...stock, quantity: stock.quantity - qty });
+        recordStockMovement({
+          id: newId(),
+          warehouseId: warehouseToDeduct,
+          productId,
+          quantityChange: -qty,
+          reason: 'sale',
+          referenceId: 'quick_sale',
+        });
+      }
+    });
+  };
+
   const pay = async (method: 'cash' | 'credit_card') => {
     if (basket.length === 0) return;
     setPaying(true);
@@ -155,6 +180,7 @@ export const QuickSalePage: React.FC = () => {
       };
       // Save to Firestore first, then print
       await addTable(record);
+      deductStock();
 
       const payload: ReceiptPayload = {
         kind: 'customer',
@@ -244,6 +270,7 @@ export const QuickSalePage: React.FC = () => {
       };
       // Save to Firestore first, then print
       await addTable(record);
+      deductStock();
 
       const payload: ReceiptPayload = {
         kind: 'customer',
@@ -314,7 +341,7 @@ export const QuickSalePage: React.FC = () => {
                       )}
                     </div>
                     <div className="name">
-                      {recipeName(it.recipeId, recipes)}
+                      <div>{recipeName(it.recipeId, recipes)}</div>
                       {it.selectedVariations && it.selectedVariations.length > 0 && (
                         <div className="muted" style={{ fontSize: '0.8rem', marginTop: 2 }}>
                           {it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')}

@@ -372,6 +372,8 @@ export const StockManagementPage: React.FC = () => {
                         (s) => s.productId === product.id,
                       );
                       const qty = stock?.quantity || 0;
+                      // Only show if stock exists and quantity > 0
+                      if (!stock || qty <= 0) return null;
                       return (
                         <tr
                           key={product.id}

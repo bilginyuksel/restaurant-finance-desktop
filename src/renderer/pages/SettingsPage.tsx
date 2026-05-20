@@ -391,7 +391,7 @@ export const SettingsPage: React.FC = () => {
             <button className="btn primary" onClick={saveRestaurant}>Kaydet</button>
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Mobil uygulamadaki ile aynı olmalı. Varsayılan: <code>restaurant-2</code>
+            Mobil uygulamadaki ile aynı olmalı. Varsayılan: <code>restaurant-1</code>
           </div>
         </div>
       </div>

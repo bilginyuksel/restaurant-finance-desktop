@@ -99,6 +99,9 @@ export const TableDetailPage: React.FC = () => {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [prepayConfirm, setPrepayConfirm] = useState(false);
   const [closeSettledConfirm, setCloseSettledConfirm] = useState(false);
+  const [editingTableName, setEditingTableName] = useState(false);
+  const [newTableName, setNewTableName] = useState('');
+  const [newTableGroup, setNewTableGroup] = useState('');
   // In-flight guard: blocks all mutation handlers while one is running so
   // rapid double-clicks (or hotkey hammering) can't submit twice. The ref
   // gives us a synchronous check; the state drives button `disabled`.
@@ -378,7 +381,7 @@ export const TableDetailPage: React.FC = () => {
     });
   };
 
-  
+
   const handlePickRecipe = (recipe: Recipe) => {
     const target: 'basket' | 'edit' = edit ? 'edit' : 'basket';
     if (recipe.variationGroups && recipe.variationGroups.length > 0) {
@@ -714,6 +717,36 @@ export const TableDetailPage: React.FC = () => {
     }
   };
 
+  const saveTableName = async () => {
+    if (!table) return;
+    const name = newTableName.trim();
+    if (!name) {
+      toastError('Masa adı boş olamaz');
+      return;
+    }
+
+    const isPersistedTable = tables.some((t) => t.id === table.id);
+    const nextTable = { ...table, name };
+    if (newTableGroup) {
+      nextTable.group = newTableGroup;
+    } else {
+      delete nextTable.group;
+    }
+
+    try {
+      if (!isPersistedTable) {
+        await addTable(nextTable);
+      } else {
+        await updateTable(nextTable);
+      }
+      setEditingTableName(false);
+      toastSuccess('Masa adı güncellendi');
+    } catch (err) {
+      console.error(err);
+      toastError('Masa adı güncellenemedi');
+    }
+  };
+
   // ---------- hotkeys ----------
   useHotkeys(
     'enter',
@@ -960,10 +993,10 @@ export const TableDetailPage: React.FC = () => {
   const editTotal = edit ? edit.items.reduce((s, it) => s + itemLineTotal(it, recipesById), 0) : 0;
   const editOrigTotal = edit
     ? edit.items.reduce((s, it) => {
-        const origQty = it._isNew ? 0 : (it._origQty ?? it.quantity);
-        const unitPrice = itemPrice(it, recipes);
-        return s + unitPrice * origQty;
-      }, 0)
+      const origQty = it._isNew ? 0 : (it._origQty ?? it.quantity);
+      const unitPrice = itemPrice(it, recipes);
+      return s + unitPrice * origQty;
+    }, 0)
     : 0;
   const editDiff = editTotal - editOrigTotal;
   const editingOrder = edit ? (table.orders ?? []).find((o) => o.id === edit.orderId) ?? null : null;
@@ -974,8 +1007,14 @@ export const TableDetailPage: React.FC = () => {
         <div className="flex-row">
           <button className="btn small" onClick={() => navigate(backTo)}>← Geri</button>
           <h2 style={{ margin: 0 }}>Masa {table.name}</h2>
-          <span className="muted">({table.orders?.length ?? 0} sipariş)</span>
+          {table.group && tableGroups.find((g) => g.id === table.group) && (
+            <span className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>
+              {tableGroups.find((g) => g.id === table.group)?.name}
+            </span>
+          )}
+
           <div className="spacer" />
+          <button className="btn small" style={{ marginLeft: 8 }} onClick={() => { setNewTableName(table.name); setNewTableGroup(table.group ?? ''); setEditingTableName(true); }}>Düzenle</button>
           {canDelete && (table.orders?.length ?? 0) === 0 && (
             <button className="btn danger small" onClick={() => setConfirmDelete(true)}>Sil</button>
           )}
@@ -1266,6 +1305,39 @@ export const TableDetailPage: React.FC = () => {
         onConfirm={() => { setConfirmDelete(false); void handleDelete(); }}
         onCancel={() => setConfirmDelete(false)}
       />
+
+      <ConfirmModal
+        open={editingTableName}
+        title="Masa Düzenle"
+        confirmLabel="Kaydet"
+        onConfirm={() => void saveTableName()}
+        onCancel={() => setEditingTableName(false)}
+      >
+        <label className="label">Masa Adı</label>
+        <input
+          className="input"
+          value={newTableName}
+          onChange={(e) => setNewTableName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void saveTableName(); }}
+          autoFocus
+        />
+        
+        {tableGroups.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <label className="label">Grup</label>
+            <select
+              className="input"
+              value={newTableGroup}
+              onChange={(e) => setNewTableGroup(e.target.value)}
+            >
+              <option value="">— Grupsuz —</option>
+              {tableGroups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </ConfirmModal>
 
       {variationModal && (
         <VariationModal

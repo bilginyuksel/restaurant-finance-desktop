@@ -7,6 +7,7 @@ import { TableDetailPage } from './pages/TableDetailPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { QuickSalePage } from './pages/QuickSalePage';
 import { HistoryPage } from './pages/HistoryPage';
+import { ReportsPage } from './pages/ReportsPage';
 import { OnlineBadge } from './components/OnlineBadge';
 import { ToastHost } from './components/Toast';
 import { authApi } from './firebase/auth';
@@ -62,6 +63,9 @@ export const App: React.FC = () => {
           <NavLink to="/history" className={({ isActive }) => (isActive ? 'active' : '')}>
             Geçmiş
           </NavLink>
+          <NavLink to="/reports" className={({ isActive }) => (isActive ? 'active' : '')}>
+            Raporlar
+          </NavLink>
           <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
             Ayarlar
           </NavLink>
@@ -76,6 +80,7 @@ export const App: React.FC = () => {
           <Route path="/table/:id" element={<TableDetailPage />} />
           <Route path="/quick-sale" element={<QuickSalePage />} />
           <Route path="/history" element={<HistoryPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="*" element={<Navigate to="/tables" replace />} />
         </Routes>

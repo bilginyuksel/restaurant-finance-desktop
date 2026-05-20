@@ -175,10 +175,10 @@ input, textarea { font-family: inherit; }
 .table-card.billed { background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%); border-color: var(--info); }
 .table-card.billed .status { color: rgba(255,255,255,0.85); }
 .table-card.closed { background: var(--surface-2); opacity: 0.6; }
-.table-card .name { font-size: 22px; font-weight: 700; }
+.table-card .name { font-size: 22px; font-weight: 700; color: white; }
 .table-card .status { font-size: 13px; color: var(--text-muted); }
 .table-card.active .status { color: rgba(255,255,255,0.85); }
-.table-card .total { font-size: 18px; font-weight: 700; margin-top: auto; }
+.table-card .total { font-size: 18px; font-weight: 700; margin-top: auto; color: white;}
 
 /* Table detail split layout */
 .detail-split { display: grid; grid-template-columns: 1fr 460px; gap: 16px; height: 100%; }

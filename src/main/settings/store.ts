@@ -1,4 +1,5 @@
 import Store from 'electron-store';
+import crypto from 'node:crypto';
 import {
   CategoryRouting,
   NamedPrinterConfig,
@@ -12,6 +13,8 @@ interface Schema {
   extraPrinters: Record<string, NamedPrinterConfig>;
   categoryRouting: CategoryRouting;
   restaurantId: string;
+  deviceTag?: string;
+  orderCounter?: { date: string; seq: number };
 }
 
 const defaultPrinter: PrinterConfig = {
@@ -32,7 +35,7 @@ const store = new Store<Schema>({
     },
     extraPrinters: {},
     categoryRouting: {},
-    restaurantId: 'restaurant-1',
+    restaurantId: 'restaurant-2',
   },
 });
 
@@ -95,4 +98,36 @@ export const settingsStore = {
   setRestaurantId(id: string): void {
     store.set('restaurantId', id);
   },
+
+  getOrCreateDeviceTag(): string {
+    let tag = store.get('deviceTag');
+    if (!tag) {
+      // 3-char base32-ish uppercase tag from random UUID
+      tag = crypto.randomUUID().replace(/-/g, '').slice(0, 3).toUpperCase();
+      store.set('deviceTag', tag);
+    }
+    return tag;
+  },
+
+  setDeviceTag(tag: string): void {
+    store.set('deviceTag', tag.trim().toUpperCase().slice(0, 10)); // limit length safely
+  },
+
+  nextOrderNumber(): { orderNumber: string; seq: number; date: string; tag: string } {
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    let counter = store.get('orderCounter');
+
+    if (!counter || counter.date !== today) {
+      counter = { date: today, seq: 0 };
+    }
+
+    counter.seq += 1;
+    store.set('orderCounter', counter); // persists synchronously
+
+    const tag = this.getOrCreateDeviceTag();
+    const seqStr = String(counter.seq).padStart(3, '0');
+    
+    const orderNumber = `${tag}-${seqStr}`;
+    return { orderNumber, seq: counter.seq, date: counter.date, tag };
+  }
 };

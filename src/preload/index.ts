@@ -53,6 +53,13 @@ const api = {
   getRestaurantId: (): Promise<string> => ipcRenderer.invoke(IPC.SETTINGS_GET_RESTAURANT_ID),
 
   setRestaurantId: (id: string): Promise<string> => ipcRenderer.invoke(IPC.SETTINGS_SET_RESTAURANT_ID, id),
+
+  nextOrderNumber: (): Promise<{ orderNumber: string; seq: number; date: string; tag: string }> => 
+    ipcRenderer.invoke(IPC.ORDER_NEXT_NUMBER),
+
+  deviceTag: (): Promise<string> => ipcRenderer.invoke(IPC.ORDER_GET_DEVICE_TAG),
+
+  setDeviceTag: (tag: string): Promise<string> => ipcRenderer.invoke(IPC.ORDER_SET_DEVICE_TAG, tag),
 };
 
 contextBridge.exposeInMainWorld('api', api);

@@ -42,6 +42,8 @@ export const QuickSalePage: React.FC = () => {
   const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string, variations?: SelectedVariation[] } | null>(null);
   const [variationModal, setVariationModal] = useState<{ recipe: Recipe } | null>(null);
   const [paying, setPaying] = useState(false);
+  const [splitPaymentModal, setSplitPaymentModal] = useState(false);
+  const [cashAmount, setCashAmount] = useState<string>('');
 
   const total = basket.reduce((s, it) => s + itemLineTotal(it, recipes), 0);
 
@@ -114,9 +116,11 @@ export const QuickSalePage: React.FC = () => {
     if (basket.length === 0) return;
     setPaying(true);
     try {
+      const { orderNumber } = await window.api.nextOrderNumber();
       const now = new Date().toISOString();
       const order = {
         id: newId(),
+        orderNumber,
         items: basket.map((it) => ({
           ...it,
           paymentStatus: 'paid' as const,
@@ -161,6 +165,7 @@ export const QuickSalePage: React.FC = () => {
         items: buildLineItems(basket, recipes),
         total,
         waiterName: user?.displayName || user?.email || undefined,
+        orderNumber,
       };
       const res = await window.api.printCustomerBill(payload);
       if (res.ok) {
@@ -170,6 +175,97 @@ export const QuickSalePage: React.FC = () => {
         toastError(`Yazıcı: ${res.error}`);
       }
       setBasket([]);
+    } catch (err) {
+      console.error(err);
+      toastError('Bir hata oluştu');
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const paySplit = async (cashAmt: number, cardAmt: number) => {
+    if (basket.length === 0) return;
+    setPaying(true);
+    try {
+      const { orderNumber } = await window.api.nextOrderNumber();
+      const now = new Date().toISOString();
+      const order = {
+        id: newId(),
+        orderNumber,
+        items: basket.map((it) => ({
+          ...it,
+          paymentStatus: 'paid' as const,
+          createdBy: user?.uid,
+          createdByName: user?.displayName || user?.email || 'Unknown',
+          createdAt: Date.now(),
+        })),
+        createdBy: user?.uid,
+        createdByName: user?.displayName || user?.email || 'Unknown',
+        createdAt: Date.now(),
+      };
+      
+      const transactions = [];
+      if (cashAmt > 0) {
+        transactions.push({
+          id: newId(),
+          tableId: '',
+          amount: cashAmt,
+          grossAmount: cashAmt,
+          mode: 'amount' as const,
+          paymentMethod: 'cash' as const,
+          createdAt: Date.now(),
+          createdBy: user?.uid,
+        });
+      }
+      if (cardAmt > 0) {
+        transactions.push({
+          id: newId(),
+          tableId: '',
+          amount: cardAmt,
+          grossAmount: cardAmt,
+          mode: 'amount' as const,
+          paymentMethod: 'credit_card' as const,
+          createdAt: Date.now(),
+          createdBy: user?.uid,
+        });
+      }
+
+      const record: Table = {
+        id: newId(),
+        name: 'Peşin Satış',
+        group: '__quick_sale__',
+        status: 'closed',
+        createdAt: now,
+        closedAt: now,
+        orders: [order],
+        totalPrice: total,
+        paymentMethod: 'cash',
+        transactions,
+      };
+      // Save to Firestore first, then print
+      await addTable(record);
+
+      const payload: ReceiptPayload = {
+        kind: 'customer',
+        restaurantName: 'HobiPark',
+        tableName: 'Peşin Satış',
+        timestamp: new Date().toLocaleString('tr-TR'),
+        currency: CURRENCY,
+        items: buildLineItems(basket, recipes),
+        total,
+        waiterName: user?.displayName || user?.email || undefined,
+        orderNumber,
+      };
+      const res = await window.api.printCustomerBill(payload);
+      if (res.ok) {
+        toastSuccess('Ödeme alındı · Fiş yazdırıldı');
+      } else {
+        toastSuccess('Ödeme alındı');
+        toastError(`Yazıcı: ${res.error}`);
+      }
+      setBasket([]);
+      setSplitPaymentModal(false);
+      setCashAmount('');
     } catch (err) {
       console.error(err);
       toastError('Bir hata oluştu');
@@ -261,6 +357,17 @@ export const QuickSalePage: React.FC = () => {
               💳 Kredi Kartı
             </button>
             <button
+              className="btn warning large block"
+              disabled={basket.length === 0 || paying}
+              onClick={() => {
+                setCashAmount('');
+                setSplitPaymentModal(true);
+              }}
+              style={{ marginTop: 4 }}
+            >
+              🍕 Parçalı Öde
+            </button>
+            <button
               className="btn small block"
               disabled={basket.length === 0}
               onClick={() => setBasket([])}
@@ -305,6 +412,57 @@ export const QuickSalePage: React.FC = () => {
           onConfirm={confirmVariation}
           onCancel={() => setVariationModal(null)}
         />
+      )}
+
+      {splitPaymentModal && (
+        <div className="modal-backdrop" onClick={() => setSplitPaymentModal(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Parçalı Öde</h3>
+            <div className="pay-summary" style={{ marginBottom: 16 }}>
+              <span className="muted">Toplam Tutar: </span>
+              <span className="pay-summary-amt" style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{formatCurrency(total)}</span>
+            </div>
+            
+            <label className="label">Nakit Ödenen Tutar</label>
+            <input
+              className="input"
+              type="number"
+              step="0.01"
+              min="0"
+              max={total}
+              autoFocus
+              value={cashAmount}
+              onChange={(e) => setCashAmount(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                   const cash = parseFloat(cashAmount);
+                   if (cash > 0 && cash < total) {
+                     const card = total - cash;
+                     paySplit(cash, card);
+                   }
+                }
+              }}
+            />
+            <div className="muted" style={{ marginTop: 8 }}>
+              Kalan (Kredi Kartı): {formatCurrency(Math.max(0, total - (parseFloat(cashAmount) || 0)))}
+            </div>
+
+            <div className="modal-actions" style={{ marginTop: 24 }}>
+              <button className="btn" onClick={() => setSplitPaymentModal(false)}>İptal</button>
+              <button
+                className="btn primary"
+                disabled={!(parseFloat(cashAmount) > 0 && parseFloat(cashAmount) < total)}
+                onClick={() => {
+                   const cash = parseFloat(cashAmount);
+                   const card = total - cash;
+                   paySplit(cash, card);
+                }}
+              >
+                Onayla
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

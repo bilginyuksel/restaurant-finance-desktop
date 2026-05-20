@@ -13,13 +13,16 @@ export function renderCustomerBill(p: ThermalPrinter, r: ReceiptPayload): void {
   p.println(s(r.restaurantName ?? 'RESTORAN'));
   p.bold(false);
   p.setTextNormal();
-  p.println(s('ADİSYON / FİŞ'));
+  p.println(s(`MASA ${r.tableName}`));
+
   p.drawLine();
 
   p.alignLeft();
+  if (r.orderNumber) {
+    p.println(s(`Sipariş No: ${r.orderNumber}`));
+  }
   p.println(s(`Masa  : ${r.tableName}`));
   p.println(s(`Tarih : ${r.timestamp}`));
-  if (r.waiterName) p.println(s(`Garson: ${r.waiterName}`));
   p.drawLine();
 
   p.tableCustom([

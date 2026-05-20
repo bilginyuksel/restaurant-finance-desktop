@@ -14,6 +14,9 @@ export const IPC = {
   SETTINGS_SET_CATEGORY_ROUTING: 'settings:setCategoryRouting',
   SETTINGS_GET_RESTAURANT_ID: 'settings:getRestaurantId',
   SETTINGS_SET_RESTAURANT_ID: 'settings:setRestaurantId',
+  ORDER_NEXT_NUMBER: 'order:nextNumber',
+  ORDER_GET_DEVICE_TAG: 'order:deviceTag',
+  ORDER_SET_DEVICE_TAG: 'order:setDeviceTag',
 } as const;
 
 export type IpcChannel = (typeof IPC)[keyof typeof IPC];

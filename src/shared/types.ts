@@ -114,6 +114,7 @@ export interface TableItem extends BaseResource {
 
 export interface TableOrder extends BaseResource {
   id: string;
+  orderNumber?: string;
   items: TableItem[];
   updatedBy?: string;
   updatedAt?: number;

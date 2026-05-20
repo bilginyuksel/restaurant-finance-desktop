@@ -147,6 +147,19 @@ const registerIpc = () => {
     settingsStore.setRestaurantId(id);
     return settingsStore.getRestaurantId();
   });
+
+  ipcMain.handle(IPC.ORDER_NEXT_NUMBER, () => {
+    return settingsStore.nextOrderNumber();
+  });
+
+  ipcMain.handle(IPC.ORDER_GET_DEVICE_TAG, () => {
+    return settingsStore.getOrCreateDeviceTag();
+  });
+
+  ipcMain.handle(IPC.ORDER_SET_DEVICE_TAG, (_e, tag: string) => {
+    settingsStore.setDeviceTag(tag);
+    return settingsStore.getOrCreateDeviceTag();
+  });
 };
 
 app.on('ready', () => {

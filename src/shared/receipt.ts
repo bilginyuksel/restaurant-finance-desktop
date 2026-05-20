@@ -20,6 +20,7 @@ export interface ReceiptPayload {
   currency: string;
   waiterName?: string;
   orderNote?: string;
+  orderNumber?: string;
 }
 
 export type PrinterTarget = 'customer' | 'kitchen';

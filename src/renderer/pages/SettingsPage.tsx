@@ -162,6 +162,7 @@ export const SettingsPage: React.FC = () => {
   const [systemPrinters, setSystemPrinters] = useState<SystemPrinter[]>([]);
   const [routing, setRouting] = useState<CategoryRouting>({});
   const [restaurantId, setRestaurantId] = useState('');
+  const [deviceTag, setDeviceTag] = useState('');
   const [savingTarget, setSavingTarget] = useState<string | null>(null);
   const [newPrinterName, setNewPrinterName] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
@@ -192,6 +193,7 @@ export const SettingsPage: React.FC = () => {
       setExtraPrinters(await window.api.getExtraPrinters());
       setRouting(await window.api.getCategoryRouting());
       setSystemPrinters(await window.api.listSystemPrinters());
+      setDeviceTag(await window.api.deviceTag());
     })();
   }, []);
 
@@ -243,6 +245,13 @@ export const SettingsPage: React.FC = () => {
     } catch (err) {
       toastError((err as Error).message);
     }
+  };
+
+  const saveDeviceTag = async () => {
+    if (!deviceTag.trim()) return;
+    const next = await window.api.setDeviceTag(deviceTag.trim());
+    setDeviceTag(next);
+    toastSuccess('Cihaz kimliği güncellendi.');
   };
 
   const saveRestaurant = async () => {
@@ -354,13 +363,29 @@ export const SettingsPage: React.FC = () => {
           <div className="muted">{user?.email ?? '-'}</div>
         </div>
         <div>
+          <label className="label">Cihaz Kimliği (Etiket)</label>
+          <div className="flex-row">
+            <input 
+              className="input" 
+              value={deviceTag} 
+              maxLength={10} 
+              style={{ textTransform: 'uppercase' }}
+              onChange={(e) => setDeviceTag(e.target.value.toUpperCase())} 
+            />
+            <button className="btn primary" onClick={saveDeviceTag}>Kaydet</button>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            Sipariş numaralarında cihazı belirten kısa kod (örn: ABC).
+          </div>
+        </div>
+        <div>
           <label className="label">Restoran Kimliği (Firestore)</label>
           <div className="flex-row">
             <input className="input" value={restaurantId} onChange={(e) => setRestaurantId(e.target.value)} />
             <button className="btn primary" onClick={saveRestaurant}>Kaydet</button>
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            Mobil uygulamadaki ile aynı olmalı. Varsayılan: <code>restaurant-1</code>
+            Mobil uygulamadaki ile aynı olmalı. Varsayılan: <code>restaurant-2</code>
           </div>
         </div>
       </div>

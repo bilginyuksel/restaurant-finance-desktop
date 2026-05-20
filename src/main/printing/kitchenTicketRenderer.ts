@@ -8,6 +8,9 @@ export function renderKitchenTicket(p: ThermalPrinter, r: ReceiptPayload): void 
   p.alignCenter();
   p.setTextQuadArea();
   p.bold(true);
+  if (r.orderNumber) {
+    p.println(s(`#${r.orderNumber}`));
+  }
   p.println(s(`MASA ${r.tableName}`));
   p.bold(false);
   p.setTextNormal();

@@ -311,6 +311,7 @@ export const TableDetailPage: React.FC = () => {
       if (deltaItems.length > 0 || cancelledItems.length > 0) {
         const deltaOrder: TableOrder = {
           id: newId('o-edit'),
+          orderNumber: originalOrder?.orderNumber,
           items: deltaItems,
           createdBy: user?.uid,
           createdByName: user?.displayName || user?.email || 'Unknown',
@@ -445,8 +446,10 @@ export const TableDetailPage: React.FC = () => {
       }
     }
 
+    const { orderNumber } = await window.api.nextOrderNumber();
     const order: TableOrder = {
       id: newId('o'),
+      orderNumber,
       items: basket.map((it) => ({
         ...it,
         createdBy: user?.uid,
@@ -531,6 +534,7 @@ export const TableDetailPage: React.FC = () => {
         items: buildLineItems(items),
         total: items.reduce((s, it) => s + (it._cancelled ? 0 : itemLineTotal(it, recipes)), 0),
         waiterName,
+        orderNumber: order.orderNumber,
       };
       const res = dest
         ? await window.api.printKitchenTo(dest, payload)
@@ -555,6 +559,7 @@ export const TableDetailPage: React.FC = () => {
       items: buildLineItems(allItems),
       total: tableTotalFromOrders(table, recipes),
       waiterName: user?.displayName || user?.email || undefined,
+      orderNumber: (table.orders ?? []).map(o => o.orderNumber).filter(Boolean)[0],
     };
     const res = await window.api.printCustomerBill(payload);
     if (res.ok) {
@@ -789,7 +794,10 @@ export const TableDetailPage: React.FC = () => {
               return (
                 <div key={o.id} className="order-block">
                   <div className="order-head">
-                    <span>{new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}</span>
+                    <span>
+                      {new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}
+                      {o.orderNumber ? ` • ${o.orderNumber}` : ''}
+                    </span>
                     <span>{o.createdByName ?? ''}</span>
                   </div>
                   {o.items.map((it, i) => {
@@ -990,7 +998,10 @@ export const TableDetailPage: React.FC = () => {
             return (
               <div key={o.id} className={`order-block${isEditing ? ' editing' : ''}`}>
                 <div className="order-head">
-                  <span>{new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}</span>
+                  <span>
+                    {new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}
+                    {o.orderNumber ? ` • ${o.orderNumber}` : ''}
+                  </span>
                   <span>{o.createdByName ?? ''}</span>
                 </div>
                 {o.items.map((it, i) => {

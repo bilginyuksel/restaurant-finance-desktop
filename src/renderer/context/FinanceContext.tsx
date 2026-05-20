@@ -135,12 +135,12 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       setUser(u);
       setAuthReady(true);
       if (u) {
-        // Resolve restaurantId from persisted settings (defaults to "restaurant-1" matching mobile).
+        // Resolve restaurantId from persisted settings (defaults to "restaurant-2" matching mobile).
         try {
           const rid = await window.api.getRestaurantId();
-          setRestaurantId(rid || 'restaurant-1');
+          setRestaurantId(rid || 'restaurant-2');
         } catch {
-          setRestaurantId('restaurant-1');
+          setRestaurantId('restaurant-2');
         }
       } else {
         setRestaurantId(null);

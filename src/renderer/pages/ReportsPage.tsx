@@ -7,7 +7,8 @@ import { Table } from '../../shared/types';
 
 export const ReportsPage: React.FC = () => {
   const { tables, recipesById, tableGroups } = useFinance();
-  const [selectedDateLabel, setSelectedDateLabel] = useState<string | null>(null);
+  const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'this_week' | 'this_month' | 'custom'>('today');
+  const [customDateRange, setCustomDateRange] = useState({ start: '', end: '' });
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
   const closedTables = useMemo(() => {
@@ -20,36 +21,58 @@ export const ReportsPage: React.FC = () => {
       });
   }, [tables]);
 
-  const groupedByDay = useMemo(() => {
-    const groups: { label: string; date: string; items: Table[] }[] = [];
-    for (const t of closedTables) {
-      if (!t.closedAt) continue;
-      const dateObj = new Date(t.closedAt);
-      const label = dateObj.toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' });
-      // use YYYY-MM-DD as a stable key/date string
-      const dateKey = `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-
-      const existing = groups.find((g) => g.label === label);
-      if (existing) {
-        existing.items.push(t);
-      } else {
-        groups.push({ label, date: dateKey, items: [t] });
-      }
+  const parseDateString = (dateString: string, isEnd: boolean) => {
+    if (!dateString) return isEnd ? new Date() : new Date(0);
+    const [y, m, d] = dateString.split('-').map(Number);
+    if (!y || isNaN(y) || !m || isNaN(m) || !d || isNaN(d)) return isEnd ? new Date() : new Date(0);
+    const date = new Date(y, m - 1, d);
+    if (isEnd) {
+      date.setHours(23, 59, 59, 999);
+    } else {
+      date.setHours(0, 0, 0, 0);
     }
-    return groups;
-  }, [closedTables]);
+    return date;
+  };
 
-  const currentGroup = groupedByDay.find(g => g.label === selectedDateLabel) || groupedByDay[0];
+  const { filteredTables, currentRange } = useMemo(() => {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    let start: Date;
+    let end: Date;
 
-  useEffect(() => {
-    if (!selectedDateLabel && groupedByDay.length > 0) {
-      setSelectedDateLabel(groupedByDay[0].label);
+    if (dateFilter === 'today') {
+      start = startOfDay;
+      end = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
+    } else if (dateFilter === 'yesterday') {
+      start = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
+      end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+    } else if (dateFilter === 'this_week') {
+      const day = startOfDay.getDay();
+      const diff = startOfDay.getDate() - day + (day === 0 ? -6 : 1);
+      start = new Date(startOfDay.getTime());
+      start.setDate(diff);
+      end = new Date();
+    } else if (dateFilter === 'this_month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date();
+    } else { // 'custom'
+      start = parseDateString(customDateRange.start, false);
+      end = parseDateString(customDateRange.end, true);
     }
-  }, [groupedByDay, selectedDateLabel]);
+
+    const filtered = closedTables.filter(t => {
+      if (!t.closedAt) return false;
+      const tTime = new Date(t.closedAt).getTime();
+      return tTime >= start.getTime() && tTime <= end.getTime();
+    });
+
+    return { filteredTables: filtered, currentRange: { start, end } };
+  }, [closedTables, dateFilter, customDateRange]);
 
   useEffect(() => {
     setSelectedCategory('all');
-  }, [selectedDateLabel]);
+  }, [dateFilter, customDateRange]);
 
   const calculateReport = (groupTables: Table[]) => {
     let totalCash = 0;
@@ -127,7 +150,24 @@ export const ReportsPage: React.FC = () => {
     return { totalCash, totalCard, totalDiscount, grossTotal, products, topProducts, groupRevenues, categoryRevenues };
   };
 
-  const report = currentGroup ? calculateReport(currentGroup.items) : null;
+  const report = filteredTables.length > 0 ? calculateReport(filteredTables) : null;
+
+  const getReportLabel = () => {
+    const formatDate = (d: Date) => d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' });
+    const formatShortDate = (d: Date) => d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    switch (dateFilter) {
+      case 'today': return `Bugün (${formatDate(currentRange.start)})`;
+      case 'yesterday': return `Dün (${formatDate(currentRange.start)})`;
+      case 'this_week': return `Bu Hafta (${formatShortDate(currentRange.start)} - ${formatShortDate(currentRange.end)})`;
+      case 'this_month': return `Bu Ay (${formatShortDate(currentRange.start)} - ${formatShortDate(currentRange.end)})`;
+      case 'custom': 
+        const s = customDateRange.start ? formatShortDate(currentRange.start) : '...';
+        const e = customDateRange.end ? formatShortDate(currentRange.end) : '...';
+        return `Özel Tarih (${s} - ${e})`;
+      default: return '';
+    }
+  };
 
   const categories = useMemo(() => {
     if (!report) return [];
@@ -143,26 +183,66 @@ export const ReportsPage: React.FC = () => {
   return (
     <div className="reports-page flex-row" style={{ alignItems: 'flex-start', gap: 24 }}>
       {/* Sidebar for dates */}
-      <div className="reports-sidebar" style={{ width: 250, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <h2 style={{ margin: '0 0 16px 0' }}>Günlük Raporlar</h2>
-        {groupedByDay.length === 0 && <p className="muted">Hiç kayıt yok.</p>}
-        {groupedByDay.map(g => (
-          <button
-            key={g.label}
-            className={`btn ${selectedDateLabel === g.label ? 'primary' : 'outline'}`}
-            style={{ textAlign: 'left', justifyContent: 'flex-start' }}
-            onClick={() => setSelectedDateLabel(g.label)}
-          >
-            {g.label}
-          </button>
-        ))}
+      <div className="reports-sidebar" style={{ width: 250, display: 'flex', flexDirection: 'column', gap: 24 }}>
+        <div>
+          <h2 style={{ margin: '0 0 16px 0' }}>Filtreler</h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {[
+              { value: 'today', label: 'Bugün' },
+              { value: 'yesterday', label: 'Dün' },
+              { value: 'this_week', label: 'Bu Hafta' },
+              { value: 'this_month', label: 'Bu Ay' }
+            ].map(f => (
+              <button
+                key={f.value}
+                className={`btn ${dateFilter === f.value ? 'primary' : 'outline'}`}
+                style={{ textAlign: 'left', justifyContent: 'flex-start' }}
+                onClick={() => setDateFilter(f.value as any)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: 16 }}>Özel Tarih</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }} className="muted">Başlangıç</label>
+              <input 
+                type="date" 
+                className="input" 
+                style={{ width: '100%' }}
+                value={customDateRange.start}
+                onChange={e => {
+                  setCustomDateRange(prev => ({ ...prev, start: e.target.value }));
+                  setDateFilter('custom');
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }} className="muted">Bitiş</label>
+              <input 
+                type="date" 
+                className="input" 
+                style={{ width: '100%' }}
+                value={customDateRange.end}
+                onChange={e => {
+                  setCustomDateRange(prev => ({ ...prev, end: e.target.value }));
+                  setDateFilter('custom');
+                }}
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Main content */}
       <div className="reports-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 24 }}>
         {report ? (
           <>
-            <h2 style={{ margin: 0 }}>Rapor: {currentGroup?.label}</h2>
+            <h2 style={{ margin: 0 }}>Rapor: {getReportLabel()}</h2>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
               <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>

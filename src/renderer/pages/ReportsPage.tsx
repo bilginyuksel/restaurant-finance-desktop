@@ -8,6 +8,7 @@ import { Table } from '../../shared/types';
 export const ReportsPage: React.FC = () => {
   const { tables, recipesById, tableGroups } = useFinance();
   const [selectedDateLabel, setSelectedDateLabel] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
 
   const closedTables = useMemo(() => {
     return tables
@@ -46,13 +47,17 @@ export const ReportsPage: React.FC = () => {
     }
   }, [groupedByDay, selectedDateLabel]);
 
+  useEffect(() => {
+    setSelectedCategory('all');
+  }, [selectedDateLabel]);
+
   const calculateReport = (groupTables: Table[]) => {
     let totalCash = 0;
     let totalCard = 0;
     let totalDiscount = 0;
     let grossTotal = 0; // Total before discount
 
-    const productMap = new Map<string, { quantity: number; amount: number; name: string; unit: string }>();
+    const productMap = new Map<string, { quantity: number; amount: number; name: string; unit: string; category: string }>();
     const groupRevenueMap = new Map<string, number>();
     const categoryRevenueMap = new Map<string, number>();
 
@@ -92,7 +97,7 @@ export const ReportsPage: React.FC = () => {
             : '';
           const productKey = rName + (varNames ? ` (${varNames})` : '');
 
-          const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: productKey, unit: rUnit };
+          const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: productKey, unit: rUnit, category: categoryName };
           existing.quantity += item.quantity;
           existing.amount += itemRevenue;
           productMap.set(productKey, existing);
@@ -123,6 +128,17 @@ export const ReportsPage: React.FC = () => {
   };
 
   const report = currentGroup ? calculateReport(currentGroup.items) : null;
+
+  const categories = useMemo(() => {
+    if (!report) return [];
+    return Array.from(new Set(report.products.map(p => p.category))).sort();
+  }, [report]);
+
+  const filteredProducts = useMemo(() => {
+    if (!report) return [];
+    if (selectedCategory === 'all') return report.products;
+    return report.products.filter(p => p.category === selectedCategory);
+  }, [report, selectedCategory]);
 
   return (
     <div className="reports-page flex-row" style={{ alignItems: 'flex-start', gap: 24 }}>
@@ -233,21 +249,44 @@ export const ReportsPage: React.FC = () => {
             </div>
 
             <div className="card" style={{ borderRadius: 8, overflow: 'hidden' }}>
-              <h3 style={{ margin: '16px 16px', paddingBottom: 8, borderBottom: '1px solid var(--border)' }}>Ürün Satışları</h3>
-              {report.products.length > 0 ? (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', borderBottom: '1px solid var(--border)' }}>
+                <h3 style={{ margin: 0 }}>Ürün Satışları</h3>
+                {categories.length > 0 && (
+                  <select 
+                    className="input" 
+                    value={selectedCategory} 
+                    onChange={e => setSelectedCategory(e.target.value)}
+                    style={{ width: 220, padding: '6px 12px' }}
+                  >
+                    <option value="all">Tüm Kategoriler</option>
+                    {categories.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              {filteredProducts.length > 0 ? (
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
                   <thead>
                     <tr style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)' }}>
                       <th style={{ padding: '12px 16px', fontWeight: 600 }}>Ürün</th>
+                      {selectedCategory === 'all' && <th style={{ padding: '12px 16px', fontWeight: 600 }}>Kategori</th>}
                       <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Miktar</th>
                       <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Tutar</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {report.products.map(p => (
+                    {filteredProducts.map(p => (
                       <tr key={p.name} style={{ borderBottom: '1px solid var(--border-light, var(--border))' }}>
                         <td style={{ padding: '12px 16px' }}>{p.name}</td>
-                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>{p.quantity % 1 !== 0 ? p.quantity.toFixed(2).replace('.', ',') : p.quantity} {p.unit}</td>
+                        {selectedCategory === 'all' && (
+                          <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>{p.category}</td>
+                        )}
+                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                          {p.unit === 'kg' 
+                            ? `${(p.quantity * 1000).toFixed(0)}g` 
+                            : `${p.quantity % 1 !== 0 ? p.quantity.toFixed(2).replace('.', ',') : p.quantity} ${p.unit}`}
+                        </td>
                         <td style={{ padding: '12px 16px', textAlign: 'right' }}>{formatCurrency(p.amount)}</td>
                       </tr>
                     ))}

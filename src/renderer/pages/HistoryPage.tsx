@@ -133,10 +133,11 @@ export const HistoryPage: React.FC = () => {
               </button>
               {!collapsed && <div className="history-day-body">{items.map((t) => {
             const total = tableTotalFromOrders(t, recipes);
-            const itemCount = (t.orders ?? []).reduce(
+            const rawItemCount = (t.orders ?? []).reduce(
               (s, o) => s + (o.items ?? []).reduce((ss, it) => ss + it.quantity, 0),
               0,
             );
+            const itemCount = Number(rawItemCount.toFixed(3));
             const group = tableGroups.find((g) => g.id === t.group);
             const s = summarize(t);
 
@@ -178,7 +179,7 @@ export const HistoryPage: React.FC = () => {
                       ? new Date(t.closedAt).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
                       : '—'}
                   </span>
-                  <span className="history-card-items">{Math.round(itemCount)} ürün</span>
+                  <span className="history-card-items">{itemCount} ürün</span>
                 </div>
                 <div className="history-card-right">
                   {s.split ? (

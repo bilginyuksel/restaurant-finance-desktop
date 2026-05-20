@@ -915,7 +915,8 @@ export const TableDetailPage: React.FC = () => {
                 .map((t) => {
                   const mLabel = modeLabel(t.mode);
                   const gross = t.grossAmount ?? t.amount;
-                  const itemCount = (t.items ?? []).reduce((s, it) => s + it.quantity, 0);
+                  const rawItemCount = (t.items ?? []).reduce((s, it) => s + it.quantity, 0);
+                  const itemCount = Number(rawItemCount.toFixed(3));
                   return (
                     <div key={t.id} className="order-block">
                       <div className="order-head">
@@ -957,7 +958,7 @@ export const TableDetailPage: React.FC = () => {
                         <div className="order-item">
                           <div className="order-item-main">
                             <span className="order-item-name muted">
-                              {Math.round(itemCount)} ürün ödendi
+                              {itemCount} ürün ödendi
                               {(t.items ?? []).length > 0 && canSeePrices ? ': ' : ''}
                               {(t.items ?? [])
                                 .map((it) => {

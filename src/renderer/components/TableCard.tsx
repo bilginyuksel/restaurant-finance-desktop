@@ -11,10 +11,11 @@ interface Props {
 
 export const TableCard: React.FC<Props> = ({ table, recipes, onOpen }) => {
   const total = tableUnpaidTotal(table, recipes);
-  const itemCount = (table.orders ?? []).reduce(
+  const rawItemCount = (table.orders ?? []).reduce(
     (s, o) => s + (o.items ?? []).reduce((ss, it) => ss + it.quantity, 0),
     0,
   );
+  const itemCount = Number(rawItemCount.toFixed(3));
   const empty = itemCount === 0 && table.status !== "closed";
   const billed = !empty && table.receiptPrinted === true;
   const isPlaceholder = table.id.startsWith("preset_");

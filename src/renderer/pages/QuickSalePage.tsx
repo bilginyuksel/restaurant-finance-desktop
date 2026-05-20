@@ -36,14 +36,16 @@ const buildLineItems = (basket: TableItem[], recipes: Recipe[]): ReceiptLineItem
     variations: it.selectedVariations?.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`),
   }));
 
+
 export const QuickSalePage: React.FC = () => {
-  const { recipes, categories, user, addTable, warehouses, stocks, defaultWarehouseId, updateStock, recordStockMovement } = useFinance();
+  const { recipes, categories, user, addTable, warehouses, stocks, defaultWarehouseId, updateStock, recordStockMovement, tableGroups } = useFinance();
   const [basket, setBasket] = useState<TableItem[]>([]);
   const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string, variations?: SelectedVariation[] } | null>(null);
   const [variationModal, setVariationModal] = useState<{ recipe: Recipe } | null>(null);
   const [paying, setPaying] = useState(false);
   const [splitPaymentModal, setSplitPaymentModal] = useState(false);
   const [cashAmount, setCashAmount] = useState<string>('');
+  const [selectedTableGroup, setSelectedTableGroup] = useState<string>("");
 
   const total = basket.reduce((s, it) => s + itemLineTotal(it, recipes), 0);
 
@@ -138,7 +140,7 @@ export const QuickSalePage: React.FC = () => {
   };
 
   const pay = async (method: 'cash' | 'credit_card') => {
-    if (basket.length === 0) return;
+    if (basket.length === 0 || !selectedTableGroup) return;
     setPaying(true);
     try {
       const { orderNumber } = await window.api.nextOrderNumber();
@@ -160,7 +162,7 @@ export const QuickSalePage: React.FC = () => {
       const record: Table = {
         id: newId(),
         name: 'Peşin Satış',
-        group: '__quick_sale__',
+        group: selectedTableGroup,
         status: 'closed',
         createdAt: now,
         closedAt: now,
@@ -210,7 +212,7 @@ export const QuickSalePage: React.FC = () => {
   };
 
   const paySplit = async (cashAmt: number, cardAmt: number) => {
-    if (basket.length === 0) return;
+    if (basket.length === 0 || !selectedTableGroup) return;
     setPaying(true);
     try {
       const { orderNumber } = await window.api.nextOrderNumber();
@@ -259,7 +261,7 @@ export const QuickSalePage: React.FC = () => {
       const record: Table = {
         id: newId(),
         name: 'Peşin Satış',
-        group: '__quick_sale__',
+        group: selectedTableGroup,
         status: 'closed',
         createdAt: now,
         closedAt: now,
@@ -369,23 +371,39 @@ export const QuickSalePage: React.FC = () => {
               <span>{formatCurrency(total)}</span>
             </div>
 
+            {/* Table Group Selection */}
+            <div style={{ marginBottom: 8 }}>
+              <label className="label" htmlFor="table-group-select">Masa Grubu Seçimi <span style={{color:'red'}}>*</span></label>
+              <select
+                id="table-group-select"
+                className="input"
+                value={selectedTableGroup}
+                onChange={e => setSelectedTableGroup(e.target.value)}
+              >
+                <option value="">-- Masa Grubu Seçin --</option>
+                {tableGroups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+
             <button
               className="btn primary large block"
-              disabled={basket.length === 0 || paying}
+              disabled={basket.length === 0 || paying || !selectedTableGroup}
               onClick={() => pay('cash')}
             >
               💵 Nakit Öde
             </button>
             <button
               className="btn info large block"
-              disabled={basket.length === 0 || paying}
+              disabled={basket.length === 0 || paying || !selectedTableGroup}
               onClick={() => pay('credit_card')}
             >
               💳 Kredi Kartı
             </button>
             <button
               className="btn warning large block"
-              disabled={basket.length === 0 || paying}
+              disabled={basket.length === 0 || paying || !selectedTableGroup}
               onClick={() => {
                 setCashAmount('');
                 setSplitPaymentModal(true);

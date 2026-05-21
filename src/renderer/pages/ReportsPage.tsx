@@ -113,17 +113,37 @@ export const ReportsPage: React.FC = () => {
 
           categoryRevenueMap.set(categoryName, (categoryRevenueMap.get(categoryName) || 0) + itemRevenue);
 
-          // Group by variation if we want, but grouping by recipeId is simpler.
-          // Or group by name + variations
-          const varNames = item.selectedVariations
-            ? item.selectedVariations.flatMap(v => v.optionNames).join(', ')
-            : '';
-          const productKey = rName + (varNames ? ` (${varNames})` : '');
+          // Key by recipeId so the same product is always grouped into one row
+          // regardless of which variation options were chosen — matches mobile behaviour.
+          const productKey = item.recipeId;
 
-          const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: productKey, unit: rUnit, category: categoryName };
+          const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: rName, unit: rUnit, category: categoryName };
           existing.quantity += item.quantity;
           existing.amount += itemRevenue;
           productMap.set(productKey, existing);
+
+          // Also count variation-linked products (e.g. Coke/Sprite chosen as a drink variation)
+          // These are real recipes that should appear as separate sold items in reports.
+          if (item.selectedVariations) {
+            for (const variation of item.selectedVariations) {
+              if (variation.selectedProducts) {
+                for (const sel of variation.selectedProducts) {
+                  const varProduct = recipesById.get(sel.productId);
+                  if (!varProduct) continue;
+                  const vpName = varProduct.name;
+                  const vpUnit = recipeUnitLabel(sel.productId, recipesById) || 'Adet';
+                  const vpCategory = varProduct.category || 'Kategorisiz';
+                  // Key by productId so multiple tables all roll up into the same linked-product row
+                  const vpKey = sel.productId;
+                  const vpExisting = productMap.get(vpKey) || { quantity: 0, amount: 0, name: vpName, unit: vpUnit, category: vpCategory };
+                  vpExisting.quantity += item.quantity;
+                  // Variation products are included in the main item price; no extra revenue
+                  vpExisting.amount += 0;
+                  productMap.set(vpKey, vpExisting);
+                }
+              }
+            }
+          }
         }
       }
     }

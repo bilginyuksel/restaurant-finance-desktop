@@ -82,6 +82,7 @@ export interface RecipeIngredient {
 export interface VariationOption {
   id: string;
   name: string;
+  productIds?: string[]; // List of selectable product IDs for this option (e.g., soft drinks)
 }
 
 export interface VariationGroup {
@@ -97,6 +98,10 @@ export interface SelectedVariation {
   groupLabel: string;
   optionIds: string[];
   optionNames: string[];
+  selectedProducts?: {
+    optionId: string;
+    productId: string;
+  }[];
 }
 
 export interface Recipe extends BaseResource {

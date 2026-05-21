@@ -585,10 +585,22 @@ export const TableDetailPage: React.FC = () => {
     if (!warehouseToDeduct) return;
 
     const allItems = (tableToDeduct.orders ?? []).flatMap((o) => o.items);
-    const productQuantities = allItems.reduce((acc, item) => {
-      acc[item.recipeId] = (acc[item.recipeId] || 0) + item.quantity;
-      return acc;
-    }, {} as Record<string, number>);
+    // Aggregate quantities by recipeId AND by selectedProducts (variation-linked products)
+    const productQuantities: Record<string, number> = {};
+    allItems.forEach((item) => {
+      // Main product
+      productQuantities[item.recipeId] = (productQuantities[item.recipeId] || 0) + item.quantity;
+      // Variation-linked products (e.g. Coke or Sprite chosen as a drink variation)
+      if (item.selectedVariations) {
+        item.selectedVariations.forEach((variation) => {
+          if (variation.selectedProducts) {
+            variation.selectedProducts.forEach((sel) => {
+              productQuantities[sel.productId] = (productQuantities[sel.productId] || 0) + item.quantity;
+            });
+          }
+        });
+      }
+    });
 
     Object.entries(productQuantities).forEach(([productId, qty]) => {
       const stock = stocks.find((s) => s.productId === productId && s.warehouseId === warehouseToDeduct);
@@ -1007,7 +1019,10 @@ export const TableDetailPage: React.FC = () => {
                                 .map((it) => {
                                   const unit = recipeUnitLabel(it.recipeId, recipesById);
                                   const qty = unit === 'kg' ? `${(it.quantity * 1000).toFixed(0)}g` : `${it.quantity}x`;
-                                  return `${qty} ${recipeName(it.recipeId, recipesById)}`;
+                                  const varInfo = it.selectedVariations && it.selectedVariations.length > 0
+                                    ? ` (${it.selectedVariations.map(sv => `${sv.groupLabel}: ${sv.optionNames.join(', ')}`).join(' | ')})`
+                                    : '';
+                                  return `${qty} ${recipeName(it.recipeId, recipesById)}${varInfo}`;
                                 })
                                 .join(', ')}
                             </span>

@@ -9,10 +9,13 @@ interface Props {
 
 export const VariationModal: React.FC<Props> = ({ recipe, onConfirm, onCancel }) => {
   const [selections, setSelections] = useState<Record<string, string[]>>({});
+  // For each option with productIds, store which productId was selected
+  const [productSelections, setProductSelections] = useState<Record<string, string>>({});
 
-  // Initialize defaults for single-select required groups
+  // Initialize defaults for single-select required groups and default product picks
   useEffect(() => {
     const initial: Record<string, string[]> = {};
+    const initialProducts: Record<string, string> = {};
     if (recipe.variationGroups) {
       recipe.variationGroups.forEach((g) => {
         if (g.mode === 'single' && g.required && g.options.length > 0) {
@@ -20,9 +23,16 @@ export const VariationModal: React.FC<Props> = ({ recipe, onConfirm, onCancel })
         } else {
           initial[g.id] = [];
         }
+        // For each option that maps to products, default to first product
+        g.options.forEach((opt) => {
+          if ((opt.productIds?.length ?? 0) > 0) {
+            initialProducts[opt.id] = opt.productIds![0];
+          }
+        });
       });
     }
     setSelections(initial);
+    setProductSelections(initialProducts);
   }, [recipe]);
 
   const toggleSelection = (groupId: string, optionId: string, mode: 'single' | 'multi') => {
@@ -55,11 +65,24 @@ export const VariationModal: React.FC<Props> = ({ recipe, onConfirm, onCancel })
         const selectedNames = selectedIds.map(
           (id) => g.options.find((o) => o.id === id)?.name || ''
         );
+        // Collect selected products for options that link to product recipes
+        const selectedProducts = selectedIds
+          .map((optionId) => {
+            const opt = g.options.find((o) => o.id === optionId);
+            if ((opt?.productIds?.length ?? 0) > 0) {
+              const productId = productSelections[optionId];
+              if (productId) return { optionId, productId };
+            }
+            return null;
+          })
+          .filter(Boolean) as { optionId: string; productId: string }[];
+
         result.push({
           groupId: g.id,
           groupLabel: g.label,
           optionIds: selectedIds,
           optionNames: selectedNames,
+          ...(selectedProducts.length > 0 ? { selectedProducts } : {}),
         });
       }
     });
@@ -68,14 +91,14 @@ export const VariationModal: React.FC<Props> = ({ recipe, onConfirm, onCancel })
 
   return (
     <div className="modal-backdrop" onClick={onCancel}>
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: '400px' }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ minWidth: '420px' }}>
         <h3>{recipe.name} - Seçenekler</h3>
-        
+
         <div style={{ maxHeight: '60vh', overflowY: 'auto', margin: '1rem 0' }}>
           {recipe.variationGroups?.map((group) => {
             const selectedIds = selections[group.id] || [];
             return (
-              <div key={group.id} style={{ marginBottom: '1rem' }}>
+              <div key={group.id} style={{ marginBottom: '1.25rem' }}>
                 <div style={{ marginBottom: '0.5rem' }}>
                   <strong>{group.label}</strong>
                   {group.required && <span style={{ color: 'red', marginLeft: 4 }}>*</span>}

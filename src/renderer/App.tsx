@@ -9,9 +9,11 @@ import { QuickSalePage } from './pages/QuickSalePage';
 import { HistoryPage } from './pages/HistoryPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { StockManagementPage } from './pages/StockManagementPage';
+import { AuditLogPage } from './pages/AuditLogPage';
 import { OnlineBadge } from './components/OnlineBadge';
 import { ToastHost } from './components/Toast';
 import { authApi } from './firebase/auth';
+import { AUDIT_ALLOWLIST } from '../shared/types';
 
 export const App: React.FC = () => {
   const { user, authReady, tableGroups, tables } = useFinance();
@@ -20,6 +22,7 @@ export const App: React.FC = () => {
   const [searchParams] = useSearchParams();
   const selectedGroup = searchParams.get('group') ?? '__all__';
   const activeTables = tables.filter((t) => t.status !== 'closed');
+  const canSeeAudit = !!user?.email && (AUDIT_ALLOWLIST as readonly string[]).includes(user.email);
 
   if (!authReady) {
     return <div className="empty-state">Yükleniyor…</div>;
@@ -73,6 +76,11 @@ export const App: React.FC = () => {
           <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
             Ayarlar
           </NavLink>
+          {canSeeAudit && (
+            <NavLink to="/audit" className={({ isActive }) => (isActive ? 'active' : '')}>
+              Denetim
+            </NavLink>
+          )}
         </nav>
         <OnlineBadge />
         <button className="btn small" onClick={() => authApi.signOut()}>Çıkış</button>
@@ -87,6 +95,7 @@ export const App: React.FC = () => {
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/stock" element={<StockManagementPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/audit" element={<AuditLogPage />} />
           <Route path="*" element={<Navigate to="/tables" replace />} />
         </Routes>
       </main>

@@ -18,6 +18,7 @@ import {
 } from '../utils/totals';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { ReceiptLineItem, ReceiptPayload } from '../../shared/receipt';
+import { recordAudit } from '../firebase/auditService';
 
 const newId = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
@@ -40,7 +41,8 @@ export const TableDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { tables, recipes, recipesById, categories, updateTable, deleteTable, addTable, user, userProfile, staffPermissions, tableLayout, tableGroups, warehouses, stocks, defaultWarehouseId, updateStock, recordStockMovement } = useFinance();
+  const { tables, recipes, recipesById, categories, updateTable, deleteTable, addTable, user, userProfile, restaurantId, staffPermissions, tableLayout, tableGroups, warehouses, stocks, defaultWarehouseId, updateStock, recordStockMovement } = useFinance();
+
 
   // Draft mode: TablesPage navigates here with a pre-generated `t_*` ID and
   // the slot's identity in router state when the user taps a placeholder.
@@ -311,6 +313,33 @@ export const TableDetailPage: React.FC = () => {
     try {
       await updateTable(next);
       setEdit(null);
+      // Audit: order updated
+      if (restaurantId && user && originalOrder) {
+        recordAudit(restaurantId, user, {
+          action: 'order.update',
+          entityId: edit.orderId,
+          entityName: `${table.name} — Sipariş`,
+          metadata: { tableId: table.id, tableName: table.name, orderNumber: originalOrder.orderNumber },
+          before: {
+            items: originalOrder.items.map((it) => ({
+              recipeId: it.recipeId,
+              productName: it.productSnapshot?.name ?? it.recipeId,
+              quantity: it.quantity,
+              price: it.price,
+              selectedVariations: it.selectedVariations,
+            })),
+          },
+          after: {
+            items: cleanItems.map((it) => ({
+              recipeId: it.recipeId,
+              productName: it.productSnapshot?.name ?? it.recipeId,
+              quantity: it.quantity,
+              price: it.price,
+              selectedVariations: it.selectedVariations,
+            })),
+          },
+        });
+      }
       if (deltaItems.length > 0 || cancelledItems.length > 0) {
         const deltaOrder: TableOrder = {
           id: newId('o-edit'),
@@ -473,6 +502,24 @@ export const TableDetailPage: React.FC = () => {
     };
     try {
       await updateTable(newTable);
+      // Audit: order added
+      if (restaurantId && user) {
+        recordAudit(restaurantId, user, {
+          action: 'order.add',
+          entityId: order.id,
+          entityName: `${table.name} — Sipariş`,
+          metadata: { tableId: table.id, tableName: table.name, orderNumber: order.orderNumber },
+          after: {
+            items: order.items.map((it) => ({
+              recipeId: it.recipeId,
+              productName: it.productSnapshot?.name ?? it.recipeId,
+              quantity: it.quantity,
+              price: it.price,
+              selectedVariations: it.selectedVariations,
+            })),
+          },
+        });
+      }
       // Fire-and-forget kitchen print (don't block UI)
       void printKitchen(order, table.name);
       setBasket([]);
@@ -717,6 +764,36 @@ export const TableDetailPage: React.FC = () => {
     try {
       await updateTable(next);
       setPaymentOpen(false);
+      // Audit: payment recorded
+      if (restaurantId && user) {
+        recordAudit(restaurantId, user, {
+          action: 'payment.record',
+          entityId: tx.id,
+          entityName: table.name,
+          metadata: {
+            tableId: table.id,
+            tableName: table.name,
+            amount: tx.amount,
+            grossAmount: tx.grossAmount,
+            paymentMethod: tx.paymentMethod,
+            mode: tx.mode,
+            discount: tx.discount,
+            rounding: tx.rounding,
+            isPrepayment: tx.isPrepayment,
+            fullyPaid,
+          },
+          after: paidItems
+            ? {
+                items: paidItems.map((it) => ({
+                  recipeId: it.recipeId,
+                  productName: it.productSnapshot?.name ?? it.recipeId,
+                  quantity: it.quantity,
+                  price: it.price,
+                })),
+              }
+            : undefined,
+        });
+      }
       if (fullyPaid) {
         deductTableStock(next);
         toastSuccess('Masa tamamen ödendi ve kapatıldı');
@@ -741,6 +818,21 @@ export const TableDetailPage: React.FC = () => {
     };
     try {
       await updateTable(next);
+      // Audit: table closed via pre-payment settlement (no new transaction, but it's an implicit payment event)
+      if (restaurantId && user) {
+        recordAudit(restaurantId, user, {
+          action: 'payment.record',
+          entityId: `close_${table.id}_${Date.now()}`,
+          entityName: table.name,
+          metadata: {
+            tableId: table.id,
+            tableName: table.name,
+            mode: 'settle_prepaid',
+            totalPrice: table.totalPrice,
+            fullyPaid: true,
+          },
+        });
+      }
       deductTableStock(next);
       toastSuccess('Masa kapatıldı');
       navigate(backTo);

@@ -54,7 +54,7 @@ export const PaymentModal: React.FC<Props> = ({ open, table, recipes, forcePrepa
   const tableTotal = useMemo(() => tableTotalFromOrders(table, recipes), [table, recipes]);
   const isPrepayment = forcePrepayment || tableTotal === 0;
 
-  const [method, setMethod] = useState<PaymentMethod>('cash');
+  const [method, setMethod] = useState<PaymentMethod>('credit_card');
   const [mode, setMode] = useState<PaymentMode>('all');
   const [amount, setAmount] = useState<string>('');
   const [selections, setSelections] = useState<ItemSelections>(new Map());
@@ -67,7 +67,7 @@ export const PaymentModal: React.FC<Props> = ({ open, table, recipes, forcePrepa
   useEffect(() => {
     if (!open) return;
     // Reset on each open
-    setMethod('cash');
+    setMethod('credit_card');
     setMode(isPrepayment ? 'amount' : 'all');
     setAmount(unpaidTotal > 0 ? unpaidTotal.toFixed(2) : '');
     setSelections(new Map());
@@ -172,13 +172,13 @@ export const PaymentModal: React.FC<Props> = ({ open, table, recipes, forcePrepa
         {/* Payment method toggle */}
         <div className="pay-toggle">
           <button
-            className={`pay-toggle-btn${method === 'cash' ? ' active' : ''}`}
-            onClick={() => setMethod('cash')}
-          >Nakit</button>
-          <button
             className={`pay-toggle-btn${method === 'credit_card' ? ' active' : ''}`}
             onClick={() => setMethod('credit_card')}
           >Kart</button>
+          <button
+            className={`pay-toggle-btn${method === 'cash' ? ' active' : ''}`}
+            onClick={() => setMethod('cash')}
+          >Nakit</button>
         </div>
 
         {/* Mode toggle — hidden in pre-payment since only 'amount' makes sense */}

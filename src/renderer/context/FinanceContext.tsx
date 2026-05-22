@@ -12,6 +12,7 @@ import {
   deleteDoc,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
+import { recordAudit } from '../firebase/auditService';
 import { User, onAuthStateChanged } from 'firebase/auth';
 import {
   Recipe,
@@ -305,6 +306,8 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
 
   const updateTable = async (table: Table) => {
     if (!restaurantId || !user) return;
+    // Capture before-state from in-memory tables (avoids extra Firestore read).
+    const previous = tables.find((t) => t.id === table.id);
     // Serialize per-table writes so we never have two setDoc calls for the
     // same doc kicked off in overlapping ticks (accidental double-clicks on
     // Save or Pay). The queue advances as soon as setDoc has *staged* the
@@ -336,13 +339,33 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
         inFlightWritesRef.current.delete(table.id);
       }
     }
+    // Determine which action to emit based on status transition.
+    const prevStatus = previous?.status;
+    const nextStatus = table.status;
+    let action: 'table.update' | 'table.close' | 'table.reopen' = 'table.update';
+    if (prevStatus === 'active' && nextStatus === 'closed') action = 'table.close';
+    else if (prevStatus === 'closed' && nextStatus === 'active') action = 'table.reopen';
+    recordAudit(restaurantId, user, {
+      action,
+      entityId: table.id,
+      entityName: table.name,
+      before: previous ? { name: previous.name, status: previous.status, group: previous.group, totalPrice: previous.totalPrice } : undefined,
+      after: { name: table.name, status: table.status, group: table.group, totalPrice: table.totalPrice },
+    });
   };
 
   const deleteTable = async (id: string) => {
     if (!restaurantId || !user) return;
+    const previous = tables.find((t) => t.id === id);
     // Fire-and-forget: offline-safe (see addTable note).
     void deleteDoc(doc(db, 'restaurants', restaurantId, 'tables', id))
       .catch((err) => console.error('[deleteTable] write failed', id, err));
+    recordAudit(restaurantId, user, {
+      action: 'table.delete',
+      entityId: id,
+      entityName: previous?.name,
+      before: previous ? { name: previous.name, status: previous.status, totalPrice: previous.totalPrice } : undefined,
+    });
   };
 
   const addTableGroup = async (group: TableGroup) => {
@@ -411,6 +434,24 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     if (!restaurantId || !user) return;
     void setDoc(doc(db, 'restaurants', restaurantId, 'stockMovements', movement.id), { ...movement, ...getAuditInfo() })
       .catch((err) => console.error('[recordStockMovement] write failed', movement.id, err));
+    const productName =
+      recipes.find((r) => r.id === movement.productId)?.name ?? movement.productId;
+    const warehouseName =
+      warehouses.find((w) => w.id === movement.warehouseId)?.name ?? movement.warehouseId;
+    recordAudit(restaurantId, user, {
+      action: 'stock_movement.record',
+      entityId: movement.id,
+      entityName: productName,
+      metadata: {
+        warehouseId: movement.warehouseId,
+        warehouseName,
+        productId: movement.productId,
+        productName,
+        quantityChange: movement.quantityChange,
+        reason: movement.reason,
+        referenceId: movement.referenceId,
+      },
+    });
   };
 
   // Force Firestore to drop and re-establish its long-poll connection. Call

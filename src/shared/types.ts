@@ -1,5 +1,7 @@
 export type Unit = 'kg' | 'g' | 'l' | 'ml' | 'pcs';
 
+export const AUDIT_ALLOWLIST = ['kaan@gmail.com', 'onur@gmail.com'] as const;
+
 export type UserRoleType = 'admin' | 'waiter';
 
 export interface StaffPermissions {
@@ -217,4 +219,31 @@ export interface Table {
   mergedTables?: string[];
   paymentMethod?: 'cash' | 'credit_card';
   receiptPrinted?: boolean;
+}
+
+export type AuditAction =
+  | 'stock_movement.record'
+  | 'order.add'
+  | 'order.update'
+  | 'order.remove'
+  | 'table.update'
+  | 'table.delete'
+  | 'table.close'
+  | 'table.reopen'
+  | 'product.update'
+  | 'product.delete'
+  | 'payment.record';
+
+export interface AuditLog {
+  id: string;
+  action: AuditAction;
+  entityId: string;
+  entityName?: string;
+  performedBy: string;       // User UID
+  performedByEmail: string;
+  performedByName: string;
+  timestamp: number;         // Date.now()
+  metadata?: Record<string, any>;
+  before?: Record<string, any>;
+  after?: Record<string, any>;
 }

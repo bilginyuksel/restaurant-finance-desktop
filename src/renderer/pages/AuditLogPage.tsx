@@ -212,6 +212,31 @@ export const AuditLogPage: React.FC = () => {
                     {fmtDate(log.timestamp)}
                   </span>
 
+                  {/* Removal reason badge */}
+                  {log.metadata?.removalReason && (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '2px 8px',
+                        borderRadius: 20,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        background: '#ef444422',
+                        color: '#ef4444',
+                        whiteSpace: 'nowrap',
+                        maxWidth: 200,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        marginLeft: 4,
+                      }}
+                      title={log.metadata.removalReason}
+                    >
+                      ⚠️ {log.metadata.removalReason}
+                    </span>
+                  )}
+
                   {/* Chevron */}
                   {hasDetail && (
                     <span style={{ marginLeft: 8, opacity: 0.5, fontSize: 12 }}>

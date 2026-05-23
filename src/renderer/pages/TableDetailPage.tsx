@@ -124,6 +124,8 @@ export const TableDetailPage: React.FC = () => {
   // (instead of the basket), and Save will persist the whole order and print only
   // the delta (newly added items + quantity increases) to the kitchen.
   const [edit, setEdit] = useState<EditState | null>(null);
+  // When saving an edit that removes items, we prompt for a reason first.
+  const [removalReasonModal, setRemovalReasonModal] = useState<{ reason: string } | null>(null);
 
   // Preserve the originating group tab so back-navigation returns to the same filter.
   const backTo = useMemo(() => {
@@ -244,7 +246,41 @@ export const TableDetailPage: React.FC = () => {
     });
   };
 
-  const saveEdit = () => runExclusive(async () => {
+  /**
+   * Returns true if the current edit has reduced or removed at least one
+   * previously-persisted (non-new) item compared to the original order.
+   */
+  const editHasRemovals = (): boolean => {
+    if (!table || !edit) return false;
+    const originalOrder = (table.orders ?? []).find((o) => o.id === edit.orderId);
+    if (!originalOrder) return false;
+    const originalQty = new Map<string, number>();
+    for (const it of originalOrder.items) {
+      const key = it.recipeId + '_' + variationsKey(it.selectedVariations);
+      originalQty.set(key, (originalQty.get(key) ?? 0) + it.quantity);
+    }
+    const editedQty = new Map<string, number>();
+    for (const it of edit.items) {
+      if (it._isNew) continue;
+      const key = it.recipeId + '_' + variationsKey(it.selectedVariations);
+      editedQty.set(key, (editedQty.get(key) ?? 0) + it.quantity);
+    }
+    return [...originalQty.entries()].some(([key, qty]) => (editedQty.get(key) ?? 0) < qty);
+  };
+
+  /**
+   * Called by the Save button. If items were removed, shows the reason modal
+   * first; otherwise saves immediately.
+   */
+  const handleSaveEdit = () => {
+    if (editHasRemovals()) {
+      setRemovalReasonModal({ reason: '' });
+    } else {
+      void saveEdit('');
+    }
+  };
+
+  const saveEdit = (removalReason = '') => runExclusive(async () => {
     if (!table || !edit) return;
     const now = Date.now();
     const cleanItems: TableItem[] = edit.items.map((it) => {
@@ -319,7 +355,12 @@ export const TableDetailPage: React.FC = () => {
           action: 'order.update',
           entityId: edit.orderId,
           entityName: `${table.name} — Sipariş`,
-          metadata: { tableId: table.id, tableName: table.name, orderNumber: originalOrder.orderNumber },
+          metadata: {
+            tableId: table.id,
+            tableName: table.name,
+            orderNumber: originalOrder.orderNumber,
+            ...(removalReason.trim() ? { removalReason: removalReason.trim() } : {}),
+          },
           before: {
             items: originalOrder.items.map((it) => ({
               recipeId: it.recipeId,
@@ -459,6 +500,36 @@ export const TableDetailPage: React.FC = () => {
         copy[idx] = { ...copy[idx], quantity: next };
       }
       return copy;
+    });
+  };
+
+  const setBasketQty = (idx: number, qty: number) => {
+    setBasket((b) => {
+      const copy = [...b];
+      if (qty <= 0) {
+        copy.splice(idx, 1);
+      } else {
+        copy[idx] = { ...copy[idx], quantity: qty };
+      }
+      return copy;
+    });
+  };
+
+  const setEditQty = (idx: number, qty: number) => {
+    setEdit((e) => {
+      if (!e) return e;
+      const items = [...e.items];
+      const it = items[idx];
+      if (!it || it.paymentStatus === 'paid') return e;
+      const unit = recipeUnitLabel(it.recipeId, recipes);
+      if (unit === 'kg') return e;
+      if (qty <= 0) {
+        if (!canRemoveItems && !it._isNew) return e;
+        items.splice(idx, 1);
+      } else {
+        items[idx] = { ...it, quantity: qty };
+      }
+      return { ...e, items };
     });
   };
 
@@ -891,7 +962,7 @@ export const TableDetailPage: React.FC = () => {
   useHotkeys(
     'enter',
     () => {
-      if (edit) void saveEdit();
+      if (edit) void handleSaveEdit();
       else if (basket.length > 0) void sendToKitchen();
     },
     { enableOnFormTags: false },
@@ -1258,14 +1329,32 @@ export const TableDetailPage: React.FC = () => {
                       className={`basket-row${it._isNew ? ' new' : ''}${increased ? ' increased' : ''}${decreased ? ' decreased' : ''}${locked ? ' locked' : ''}`}
                     >
                       <div className="qty-ctrl">
-                        {unit !== 'kg' && !locked && (
+                        {unit !== 'kg' && !locked ? (
                           <>
-                            <button onClick={() => editInc(idx, -1)}>−</button>
-                            <span className="qty">{qtyDisplay}</span>
-                            <button onClick={() => editInc(idx, +1)}>+</button>
+                            <button
+                              className="qty-btn"
+                              onClick={() => editInc(idx, -1)}
+                              title="Azalt"
+                            >−</button>
+                            <input
+                              className="qty-input"
+                              type="number"
+                              min={1}
+                              value={it.quantity}
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value, 10);
+                                setEditQty(idx, isNaN(v) ? 1 : v);
+                              }}
+                            />
+                            <button
+                              className="qty-btn"
+                              onClick={() => editInc(idx, 1)}
+                              title="Artır"
+                            >+</button>
                           </>
+                        ) : (
+                          <span className="qty">{qtyDisplay}</span>
                         )}
-                        {(unit === 'kg' || locked) && <span className="qty">{qtyDisplay}</span>}
                       </div>
                       <div className="name">
                         {recipeName(it.recipeId, recipes)}
@@ -1299,7 +1388,7 @@ export const TableDetailPage: React.FC = () => {
                   {editDiff > 0 ? '+' : ''}{formatCurrency(editDiff)}
                 </span>
               </div>
-              <button className="btn primary large block" disabled={busy} onClick={() => void saveEdit()}>
+              <button className="btn primary large block" disabled={busy} onClick={handleSaveEdit}>
                 Kaydet &amp; Yeni Ürünleri Yazdır (Enter)
               </button>
             </div>
@@ -1320,14 +1409,32 @@ export const TableDetailPage: React.FC = () => {
                   return (
                     <div key={idx} className="basket-row">
                       <div className="qty-ctrl">
-                        {unit !== 'kg' && (
+                        {unit !== 'kg' ? (
                           <>
-                            <button onClick={() => incBasket(idx, -1)}>−</button>
-                            <span className="qty">{qtyDisplay}</span>
-                            <button onClick={() => incBasket(idx, +1)}>+</button>
+                            <button
+                              className="qty-btn"
+                              onClick={() => incBasket(idx, -1)}
+                              title="Azalt"
+                            >−</button>
+                            <input
+                              className="qty-input"
+                              type="number"
+                              min={1}
+                              value={it.quantity}
+                              onChange={(e) => {
+                                const v = parseInt(e.target.value, 10);
+                                setBasketQty(idx, isNaN(v) ? 1 : v);
+                              }}
+                            />
+                            <button
+                              className="qty-btn"
+                              onClick={() => incBasket(idx, 1)}
+                              title="Artır"
+                            >+</button>
                           </>
+                        ) : (
+                          <span className="qty">{qtyDisplay}</span>
                         )}
-                        {unit === 'kg' && <span className="qty">{qtyDisplay}</span>}
                       </div>
                       <div className="name">
                         <div>{recipeName(it.recipeId, recipes)}</div>
@@ -1338,9 +1445,7 @@ export const TableDetailPage: React.FC = () => {
                         )}
                       </div>
                       <div className="price">{formatCurrency(itemLineTotal(it, recipes))}</div>
-                      {unit === 'kg' && (
-                        <button className="btn small danger" onClick={() => incBasket(idx, -it.quantity)}>×</button>
-                      )}
+                      <button className="btn small danger" onClick={() => incBasket(idx, -it.quantity)} title="Kaldır">×</button>
                     </div>
                   );
                 })
@@ -1504,6 +1609,34 @@ export const TableDetailPage: React.FC = () => {
           onCancel={() => setVariationModal(null)}
         />
       )}
+
+      <ConfirmModal
+        open={!!removalReasonModal}
+        title="Ürün Silme Sebebi"
+        confirmLabel="Onayla &amp; Kaydet"
+        confirmDisabled={!removalReasonModal?.reason.trim()}
+        onConfirm={() => {
+          const reason = removalReasonModal?.reason ?? '';
+          setRemovalReasonModal(null);
+          void saveEdit(reason);
+        }}
+        onCancel={() => setRemovalReasonModal(null)}
+      >
+        <p className="muted" style={{ marginBottom: 8 }}>
+          ⚠️ Silinmiş ürünler bulundu, lütfen sebebini giriniz.
+        </p>
+        <textarea
+          className="input"
+          rows={3}
+          autoFocus
+          placeholder="Sebep giriniz..."
+          style={{ width: '100%', resize: 'vertical', fontFamily: 'inherit' }}
+          value={removalReasonModal?.reason ?? ''}
+          onChange={(e) =>
+            setRemovalReasonModal((m) => (m ? { ...m, reason: e.target.value } : m))
+          }
+        />
+      </ConfirmModal>
     </div>
   );
 

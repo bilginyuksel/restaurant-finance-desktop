@@ -94,11 +94,6 @@ function buildPrinterFromConfig(
   });
 }
 
-function buildPrinter(target: PrinterTarget): ThermalPrinter {
-  const cfg = settingsStore.getPrinters()[target];
-  return buildPrinterFromConfig(cfg, target);
-}
-
 /**
  * Emit a small prelude that prevents Turkish bytes (0x80–0xFF in PC857) from
  * being interpreted as the first half of a multibyte Kanji character. Many

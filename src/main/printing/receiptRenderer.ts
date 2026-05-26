@@ -18,9 +18,7 @@ export function renderCustomerBill(p: ThermalPrinter, r: ReceiptPayload): void {
   p.drawLine();
 
   p.alignLeft();
-  if (r.orderNumber) {
-    p.println(s(`Sipariş No: ${r.orderNumber}`));
-  }
+  p.println(s(`Sipariş No: ${r.orderNumber ?? '-'}`));
   p.println(s(`Masa  : ${r.tableName}`));
   p.println(s(`Tarih : ${r.timestamp}`));
   p.drawLine();

@@ -284,18 +284,20 @@ export const TableDetailPage: React.FC = () => {
     if (!table || !edit) return;
     const now = Date.now();
     const cleanItems: TableItem[] = edit.items.map((it) => {
-      const { _origQty, _isNew, ...rest } = it;
+      const qtyToSave = typeof it.quantity === 'number' ? it.quantity : 1;
+      const { _origQty, _isNew, quantity, ...rest } = it as any;
       void _origQty;
       // Stamp createdBy/createdAt on newly added items so the rest of the app treats them like any other order item.
       if (_isNew) {
         return {
           ...rest,
+          quantity: qtyToSave,
           createdBy: user?.uid,
           createdByName: user?.displayName || user?.email || 'Unknown',
           createdAt: now,
         };
       }
-      return rest;
+      return { ...rest, quantity: qtyToSave } as TableItem;
     });
 
     // Compute delta: new items get their full quantity; existing items contribute (new - original) if positive.
@@ -503,10 +505,10 @@ export const TableDetailPage: React.FC = () => {
     });
   };
 
-  const setBasketQty = (idx: number, qty: number) => {
+  const setBasketQty = (idx: number, qty: any) => {
     setBasket((b) => {
       const copy = [...b];
-      if (qty <= 0) {
+      if (qty !== '' && qty <= 0) {
         copy.splice(idx, 1);
       } else {
         copy[idx] = { ...copy[idx], quantity: qty };
@@ -515,7 +517,7 @@ export const TableDetailPage: React.FC = () => {
     });
   };
 
-  const setEditQty = (idx: number, qty: number) => {
+  const setEditQty = (idx: number, qty: any) => {
     setEdit((e) => {
       if (!e) return e;
       const items = [...e.items];
@@ -523,7 +525,7 @@ export const TableDetailPage: React.FC = () => {
       if (!it || it.paymentStatus === 'paid') return e;
       const unit = recipeUnitLabel(it.recipeId, recipes);
       if (unit === 'kg') return e;
-      if (qty <= 0) {
+      if (qty !== '' && qty <= 0) {
         if (!canRemoveItems && !it._isNew) return e;
         items.splice(idx, 1);
       } else {
@@ -555,6 +557,7 @@ export const TableDetailPage: React.FC = () => {
       orderNumber,
       items: basket.map((it) => ({
         ...it,
+        quantity: typeof it.quantity === 'number' ? it.quantity : 1,
         createdBy: user?.uid,
         createdByName: user?.displayName || user?.email || 'Unknown',
         createdAt: Date.now(),
@@ -1342,10 +1345,20 @@ export const TableDetailPage: React.FC = () => {
                               className="qty-input"
                               type="number"
                               min={1}
-                              value={it.quantity}
+                              value={(it.quantity as any) === '' ? '' : it.quantity}
                               onChange={(e) => {
-                                const v = parseInt(e.target.value, 10);
-                                setEditQty(idx, isNaN(v) ? 1 : v);
+                                const val = e.target.value;
+                                if (val === '') {
+                                  setEditQty(idx, '');
+                                } else {
+                                  const v = parseInt(val, 10);
+                                  if (!isNaN(v)) setEditQty(idx, v);
+                                }
+                              }}
+                              onBlur={(e) => {
+                                if (e.target.value === '' || e.target.value === '0') {
+                                  setEditQty(idx, 1);
+                                }
                               }}
                             />
                             <button
@@ -1422,10 +1435,20 @@ export const TableDetailPage: React.FC = () => {
                               className="qty-input"
                               type="number"
                               min={1}
-                              value={it.quantity}
+                              value={(it.quantity as any) === '' ? '' : it.quantity}
                               onChange={(e) => {
-                                const v = parseInt(e.target.value, 10);
-                                setBasketQty(idx, isNaN(v) ? 1 : v);
+                                const val = e.target.value;
+                                if (val === '') {
+                                  setBasketQty(idx, '');
+                                } else {
+                                  const v = parseInt(val, 10);
+                                  if (!isNaN(v)) setBasketQty(idx, v);
+                                }
+                              }}
+                              onBlur={(e) => {
+                                if (e.target.value === '' || e.target.value === '0') {
+                                  setBasketQty(idx, 1);
+                                }
                               }}
                             />
                             <button

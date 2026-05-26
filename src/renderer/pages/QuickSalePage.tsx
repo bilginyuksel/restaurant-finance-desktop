@@ -49,6 +49,50 @@ export const QuickSalePage: React.FC = () => {
 
   const total = basket.reduce((s, it) => s + itemLineTotal(it, recipes), 0);
 
+  // ---- kitchen ticket ----
+  const printKitchenTicket = async (items: TableItem[], orderNumber?: string) => {
+    if (items.length === 0) return;
+
+    let routing: Record<string, string> = {};
+    try {
+      routing = await window.api.getCategoryRouting();
+    } catch {
+      routing = {};
+    }
+
+    // Group items by destination printer (same logic as TableDetailPage).
+    const groups = new Map<string, TableItem[]>();
+    for (const it of items) {
+      const recipe = recipes.find((r) => r.id === it.recipeId);
+      const cat = recipe?.category ?? '';
+      const dest = routing[cat] ?? '';
+      if (dest === '__skip__') continue;
+      const arr = groups.get(dest) ?? [];
+      arr.push(it);
+      groups.set(dest, arr);
+    }
+
+    const timestamp = new Date().toLocaleString('tr-TR');
+    const waiterName = user?.displayName || user?.email || undefined;
+
+    for (const [dest, groupItems] of groups) {
+      const payload: ReceiptPayload = {
+        kind: 'kitchen',
+        tableName: 'Peşin Satış',
+        timestamp,
+        currency: CURRENCY,
+        items: buildLineItems(groupItems, recipes),
+        total: groupItems.reduce((s, it) => s + itemLineTotal(it, recipes), 0),
+        waiterName,
+        orderNumber,
+      };
+      const res = dest
+        ? await window.api.printKitchenTo(dest, payload)
+        : await window.api.printKitchenTicket(payload);
+      if (!res.ok) console.error(`Mutfak yazıcı (${dest || 'mutfak'}): ${res.error}`);
+    }
+  };
+
   // ---- basket helpers ----
   const addToBasket = (recipe: Recipe, qty: number, selectedVariations?: SelectedVariation[]) => {
     setBasket((b) => {
@@ -195,12 +239,15 @@ export const QuickSalePage: React.FC = () => {
         waiterName: user?.displayName || user?.email || undefined,
         orderNumber,
       };
-      const res = await window.api.printCustomerBill(payload);
-      if (res.ok) {
+      const [billRes] = await Promise.all([
+        window.api.printCustomerBill(payload),
+        printKitchenTicket(basket, orderNumber),
+      ]);
+      if (billRes.ok) {
         toastSuccess('Ödeme alındı · Fiş yazdırıldı');
       } else {
         toastSuccess('Ödeme alındı');
-        toastError(`Yazıcı: ${res.error}`);
+        toastError(`Yazıcı: ${billRes.error}`);
       }
       setBasket([]);
     } catch (err) {
@@ -285,12 +332,15 @@ export const QuickSalePage: React.FC = () => {
         waiterName: user?.displayName || user?.email || undefined,
         orderNumber,
       };
-      const res = await window.api.printCustomerBill(payload);
-      if (res.ok) {
+      const [billRes] = await Promise.all([
+        window.api.printCustomerBill(payload),
+        printKitchenTicket(basket, orderNumber),
+      ]);
+      if (billRes.ok) {
         toastSuccess('Ödeme alındı · Fiş yazdırıldı');
       } else {
         toastSuccess('Ödeme alındı');
-        toastError(`Yazıcı: ${res.error}`);
+        toastError(`Yazıcı: ${billRes.error}`);
       }
       setBasket([]);
       setSplitPaymentModal(false);

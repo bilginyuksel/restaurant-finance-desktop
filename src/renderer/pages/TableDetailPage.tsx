@@ -630,12 +630,14 @@ export const TableDetailPage: React.FC = () => {
       routing = {};
     }
 
-    // Group items by destination printer id. '' means default kitchen.
+    // Group items by destination printer id.
+    // '' means default kitchen; '__skip__' means do not send to any printer.
     const groups = new Map<string, (TableItem & { _cancelled?: boolean })[]>();
     const pushTo = (it: TableItem & { _cancelled?: boolean }) => {
       const recipe = recipes.find((r) => r.id === it.recipeId);
       const cat = recipe?.category ?? '';
       const dest = routing[cat] ?? '';
+      if (dest === '__skip__') return; // category excluded from kitchen printing
       const arr = groups.get(dest) ?? [];
       arr.push(it);
       groups.set(dest, arr);

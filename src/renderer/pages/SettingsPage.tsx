@@ -334,6 +334,7 @@ export const SettingsPage: React.FC = () => {
       { value: '', label: 'Varsayılan Mutfak' },
       { value: 'kitchen', label: 'Mutfak Yazıcısı' },
       { value: 'customer', label: 'Müşteri / Bar Yazıcısı' },
+      { value: '__skip__', label: '❌ Yazdırma (atla)' },
     ];
     for (const ep of Object.values(extraPrinters)) {
       opts.push({ value: ep.id, label: ep.name });
@@ -616,6 +617,7 @@ export const SettingsPage: React.FC = () => {
         </div>
         <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
           Bir kategori için yazıcı seçilmezse o kategorideki ürünler <b>Mutfak Yazıcısı (Varsayılan)</b>'na gönderilir.
+          Mutfağa hiç gönderilmesini istemediğiniz kategoriler için <b>❌ Yazdırma (atla)</b> seçeneğini kullanın.
         </div>
       </div>
 

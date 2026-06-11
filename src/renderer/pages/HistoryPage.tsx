@@ -33,7 +33,7 @@ export const HistoryPage: React.FC = () => {
     if (historyDates.length === 0) return;
     const lastDateStr = historyDates[historyDates.length - 1];
     const lastDate = new Date(lastDateStr);
-    const newDates = [];
+    const newDates: string[] = [];
     for (let i = 1; i <= 14; i++) {
       const d = new Date(lastDate);
       d.setDate(d.getDate() - i);
@@ -101,7 +101,7 @@ export const HistoryPage: React.FC = () => {
   // Build a per-table payment summary out of stored transactions. Falls back
   // to the legacy single `paymentMethod` field when no transactions exist
   // (very old records).
-  const summarize = (t: typeof closedTables[number]) => {
+  const summarize = (t: Table) => {
     const txs = t.transactions ?? [];
     const cash = txs.filter((tx) => tx.paymentMethod === 'cash').reduce((s, tx) => s + tx.amount, 0);
     const card = txs.filter((tx) => tx.paymentMethod === 'credit_card').reduce((s, tx) => s + tx.amount, 0);

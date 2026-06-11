@@ -1,49 +1,96 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useFinance } from '../context/FinanceContext';
 import { formatCurrency } from '../utils/currency';
 import { tableTotalFromOrders } from '../utils/totals';
+import { fetchClosedTables } from '../services/financeService';
+import { Table } from '../../shared/types';
 
 export const HistoryPage: React.FC = () => {
-  const { tables, recipes, tableGroups, userProfile, staffPermissions } = useFinance();
+  const { restaurantId, recipes, tableGroups, userProfile, staffPermissions } = useFinance();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set());
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
+  const [historyDates, setHistoryDates] = useState<string[]>([]);
+  const [historyTables, setHistoryTables] = useState<Record<string, Table[]>>({});
+  const [isLoadingHistory, setIsLoadingHistory] = useState<Record<string, boolean>>({});
 
-  const toggleDay = (label: string) =>
-    setCollapsedDays((prev) => {
-      const next = new Set(prev);
-      next.has(label) ? next.delete(label) : next.add(label);
-      return next;
-    });
+  useEffect(() => {
+    const dates = [];
+    const today = new Date();
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      dates.push(`${y}-${m}-${day}`);
+    }
+    setHistoryDates(dates);
+  }, []);
+
+  const loadMoreDates = () => {
+    if (historyDates.length === 0) return;
+    const lastDateStr = historyDates[historyDates.length - 1];
+    const lastDate = new Date(lastDateStr);
+    const newDates = [];
+    for (let i = 1; i <= 14; i++) {
+      const d = new Date(lastDate);
+      d.setDate(d.getDate() - i);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      newDates.push(`${y}-${m}-${day}`);
+    }
+    setHistoryDates(prev => [...prev, ...newDates]);
+  };
+
+  const toggleDay = async (dateStr: string) => {
+    const isExpanded = expandedDays.has(dateStr);
+    if (isExpanded) {
+      setExpandedDays((prev) => {
+        const next = new Set(prev);
+        next.delete(dateStr);
+        return next;
+      });
+    } else {
+      setExpandedDays((prev) => {
+        const next = new Set(prev);
+        next.add(dateStr);
+        return next;
+      });
+
+      if (!historyTables[dateStr] && !isLoadingHistory[dateStr] && restaurantId) {
+        setIsLoadingHistory(prev => ({ ...prev, [dateStr]: true }));
+        try {
+          const startOfDay = new Date(dateStr);
+          startOfDay.setHours(0, 0, 0, 0);
+          const endOfDay = new Date(dateStr);
+          endOfDay.setHours(23, 59, 59, 999);
+          
+          const data = await fetchClosedTables(restaurantId, startOfDay.toISOString(), endOfDay.toISOString());
+          data.sort((a, b) => {
+            const aTime = a.closedAt ? new Date(a.closedAt).getTime() : 0;
+            const bTime = b.closedAt ? new Date(b.closedAt).getTime() : 0;
+            return bTime - aTime;
+          });
+          
+          setHistoryTables(prev => ({ ...prev, [dateStr]: data }));
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setIsLoadingHistory(prev => ({ ...prev, [dateStr]: false }));
+        }
+      }
+    }
+  };
 
   const canSeeTotal = userProfile?.role === 'admin' || (staffPermissions?.canSeeHistoryTotal ?? true);
 
-  const closedTables = tables
-    .filter((t) => t.status === 'closed')
-    .sort((a, b) => {
-      const aTime = a.closedAt ? new Date(a.closedAt).getTime() : 0;
-      const bTime = b.closedAt ? new Date(b.closedAt).getTime() : 0;
-      return bTime - aTime;
-    });
-
-  const filtered = search.trim()
-    ? closedTables.filter((t) => t.name.toLowerCase().includes(search.trim().toLowerCase()))
-    : closedTables;
-
-  // Group by local date string (e.g. "17 Mayıs 2026")
-  const groupedByDay: { label: string; items: typeof filtered }[] = [];
-  for (const t of filtered) {
-    const label = t.closedAt
-      ? new Date(t.closedAt).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' })
-      : 'Bilinmeyen tarih';
-    const existing = groupedByDay.find((g) => g.label === label);
-    if (existing) {
-      existing.items.push(t);
-    } else {
-      groupedByDay.push({ label, items: [t] });
-    }
-  }
+  const filterTables = (tables: Table[]) => {
+    if (!search.trim()) return tables;
+    return tables.filter((t) => t.name.toLowerCase().includes(search.trim().toLowerCase()));
+  };
 
   const paymentLabel = (method?: string) => {
     if (method === 'cash') return '💵 Nakit';
@@ -68,7 +115,7 @@ export const HistoryPage: React.FC = () => {
     <>
       <div className="flex-row" style={{ marginBottom: 20 }}>
         <h2 style={{ margin: 0 }}>Geçmiş</h2>
-        <span className="muted" style={{ fontSize: 14 }}>{closedTables.length} kayıt</span>
+
         <div className="spacer" />
         <input
           className="input"
@@ -79,14 +126,18 @@ export const HistoryPage: React.FC = () => {
         />
       </div>
 
-      {filtered.length === 0 ? (
+      {historyDates.length === 0 ? (
         <div className="empty-state">
-          <p>Kapatılmış masa bulunamadı.</p>
+          <p>Yükleniyor...</p>
         </div>
       ) : (
         <div className="history-list">
-          {groupedByDay.map(({ label, items }) => {
-            const collapsed = collapsedDays.has(label);
+          {historyDates.map((dateStr) => {
+            const label = new Date(dateStr).toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' });
+            const expanded = expandedDays.has(dateStr);
+            const isLoading = isLoadingHistory[dateStr];
+            const rawItems = historyTables[dateStr] || [];
+            const items = filterTables(rawItems);
 
             // Daily totals
             const dayTotals = items.reduce(
@@ -103,18 +154,18 @@ export const HistoryPage: React.FC = () => {
             );
 
             return (
-            <div key={label} className="history-day-section">
+            <div key={dateStr} className="history-day-section">
               <button
-                className={`history-day-header${collapsed ? ' history-day-header--collapsed' : ''}`}
-                onClick={() => toggleDay(label)}
-                aria-expanded={!collapsed}
+                className={`history-day-header${!expanded ? ' history-day-header--collapsed' : ''}`}
+                onClick={() => toggleDay(dateStr)}
+                aria-expanded={expanded}
               >
                 <span className="history-day-title">
                   <span className="history-day-chevron" />
                   <span className="history-day-label">{label}</span>
-                  <span className="history-day-count">{items.length} kayıt</span>
+                  <span className="history-day-count">{expanded && !isLoading ? `${items.length} kayıt` : 'Yüklemek için tıklayın'}</span>
                 </span>
-                {canSeeTotal && (
+                {expanded && !isLoading && items.length > 0 && canSeeTotal && (
                   <span className="history-day-totals">
                     {dayTotals.discount > 0 && (
                       <span className="history-day-chip history-day-chip--warn">
@@ -131,7 +182,13 @@ export const HistoryPage: React.FC = () => {
                   </span>
                 )}
               </button>
-              {!collapsed && <div className="history-day-body">{items.map((t) => {
+              {expanded && (
+                <div className="history-day-body">
+                  {isLoading ? (
+                    <div style={{ padding: 16, color: 'var(--text-muted)' }}>Masalar yükleniyor...</div>
+                  ) : items.length === 0 ? (
+                    <div style={{ padding: 16, color: 'var(--text-muted)' }}>Bu tarihte kapatılmış masa bulunamadı.</div>
+                  ) : items.map((t) => {
             const total = tableTotalFromOrders(t, recipes);
             const rawItemCount = (t.orders ?? []).reduce(
               (s, o) => s + (o.items ?? []).reduce((ss, it) => ss + it.quantity, 0),
@@ -198,10 +255,14 @@ export const HistoryPage: React.FC = () => {
                 </div>
               </button>
               );
-            })}</div>}
+            })}</div>)}
             </div>
             );
           })}
+          
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 24 }}>
+            <button className="btn outline" onClick={loadMoreDates}>Daha eski günleri yükle</button>
+          </div>
         </div>
       )}
     </>

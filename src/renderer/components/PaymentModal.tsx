@@ -250,7 +250,7 @@ export const PaymentModal: React.FC<Props> = ({ open, table, recipes, forcePrepa
               return (
                 <div key={o.id} className="pay-order">
                   <div className="pay-order-head">
-                    {new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')} · {o.createdByName ?? ''}
+                    {new Date(o.createdAt ?? 0).toLocaleString('tr-TR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })} · {o.createdByName ?? ''}
                   </div>
                   {pending.map(({ it, idx }) => {
                     const unit = recipeUnitLabel(it.recipeId, recipes);

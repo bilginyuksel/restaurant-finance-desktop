@@ -10,6 +10,7 @@ import {
   Unsubscribe,
   updateDoc,
   deleteDoc,
+  where,
 } from 'firebase/firestore';
 import { auth, db } from '../firebase/config';
 import { recordAudit } from '../firebase/auditService';
@@ -205,8 +206,9 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     const subscribe = <T,>(
       colName: string,
       setter: (data: T[]) => void,
+      additionalQueries: any[] = []
     ) => {
-      const q = query(collection(db, 'restaurants', restaurantId, colName));
+      const q = query(collection(db, 'restaurants', restaurantId, colName), ...additionalQueries);
       // includeMetadataChanges: true is required so we receive the metadata-only
       // event when a listener transitions from cache to server-confirmed. Without
       // it Firestore suppresses callbacks when the server data equals the cache,
@@ -225,7 +227,7 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     };
 
     subscribe<Recipe>('recipes', setRecipes);
-    subscribe<Table>('tables', setTables);
+    subscribe<Table>('tables', setTables, [where("status", "==", "active")]);
     subscribe<Warehouse>('warehouses', setWarehouses);
     subscribe<Stock>('stocks', setStocks);
     subscribe<TableGroup>('tableGroups', (groups) =>

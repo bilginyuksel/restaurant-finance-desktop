@@ -4,22 +4,13 @@ import { useFinance } from '../context/FinanceContext';
 import { formatCurrency } from '../utils/currency';
 import { itemPrice, recipeName, recipeUnitLabel } from '../utils/totals';
 import { Table } from '../../shared/types';
+import { listenToClosedTables } from '../services/financeService';
 
 export const ReportsPage: React.FC = () => {
-  const { tables, recipesById, tableGroups } = useFinance();
+  const { restaurantId, recipesById, tableGroups } = useFinance();
   const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'this_week' | 'this_month' | 'custom'>('today');
   const [customDateRange, setCustomDateRange] = useState({ start: '', end: '' });
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-
-  const closedTables = useMemo(() => {
-    return tables
-      .filter((t) => t.status === 'closed')
-      .sort((a, b) => {
-        const aTime = a.closedAt ? new Date(a.closedAt).getTime() : 0;
-        const bTime = b.closedAt ? new Date(b.closedAt).getTime() : 0;
-        return bTime - aTime; // descending
-      });
-  }, [tables]);
 
   const parseDateString = (dateString: string, isEnd: boolean) => {
     if (!dateString) return isEnd ? new Date() : new Date(0);
@@ -34,7 +25,7 @@ export const ReportsPage: React.FC = () => {
     return date;
   };
 
-  const { filteredTables, currentRange } = useMemo(() => {
+  const currentRange = useMemo(() => {
     const now = new Date();
     const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
@@ -61,14 +52,33 @@ export const ReportsPage: React.FC = () => {
       end = parseDateString(customDateRange.end, true);
     }
 
-    const filtered = closedTables.filter(t => {
-      if (!t.closedAt) return false;
-      const tTime = new Date(t.closedAt).getTime();
-      return tTime >= start.getTime() && tTime <= end.getTime();
-    });
+    return { start, end };
+  }, [dateFilter, customDateRange]);
 
-    return { filteredTables: filtered, currentRange: { start, end } };
-  }, [closedTables, dateFilter, customDateRange]);
+  const [filteredTables, setFilteredTables] = useState<Table[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!restaurantId) return;
+    setIsLoading(true);
+    
+    const unsubscribe = listenToClosedTables(
+      restaurantId, 
+      currentRange.start.toISOString(), 
+      currentRange.end.toISOString(),
+      (data) => {
+        data.sort((a, b) => {
+          const aTime = a.closedAt ? new Date(a.closedAt).getTime() : 0;
+          const bTime = b.closedAt ? new Date(b.closedAt).getTime() : 0;
+          return bTime - aTime;
+        });
+        setFilteredTables(data);
+        setIsLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentRange, restaurantId]);
 
   useEffect(() => {
     setSelectedCategory('all');
@@ -260,7 +270,11 @@ export const ReportsPage: React.FC = () => {
 
       {/* Main content */}
       <div className="reports-content" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 24 }}>
-        {report ? (
+        {isLoading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 48 }}>
+            <p className="muted">Rapor yükleniyor...</p>
+          </div>
+        ) : report ? (
           <>
             <h2 style={{ margin: 0 }}>Rapor: {getReportLabel()}</h2>
 

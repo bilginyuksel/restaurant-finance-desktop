@@ -1044,7 +1044,7 @@ export const TableDetailPage: React.FC = () => {
                 <div key={o.id} className="order-block">
                   <div className="order-head">
                     <span>
-                      {new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}
+                      {new Date(o.createdAt ?? 0).toLocaleString('tr-TR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
                       {o.orderNumber ? ` • ${o.orderNumber}` : ''}
                     </span>
                     <span>{o.createdByName ?? ''}</span>
@@ -1265,7 +1265,7 @@ export const TableDetailPage: React.FC = () => {
               <div key={o.id} className={`order-block${isEditing ? ' editing' : ''}`}>
                 <div className="order-head">
                   <span>
-                    {new Date(o.createdAt ?? 0).toLocaleTimeString('tr-TR')}
+                    {new Date(o.createdAt ?? 0).toLocaleString('tr-TR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
                     {o.orderNumber ? ` • ${o.orderNumber}` : ''}
                   </span>
                   <span>{o.createdByName ?? ''}</span>
@@ -1312,7 +1312,7 @@ export const TableDetailPage: React.FC = () => {
             <header className="basket-panel-head">
               <span className="basket-panel-title">Sipariş Düzenle</span>
               <span className="basket-panel-badge edit">
-                {editingOrder ? new Date(editingOrder.createdAt ?? 0).toLocaleTimeString('tr-TR') : ''}
+                {editingOrder ? new Date(editingOrder.createdAt ?? 0).toLocaleString('tr-TR', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : ''}
               </span>
               <div className="spacer" />
               <button className="btn small" onClick={cancelEdit}>İptal (Esc)</button>

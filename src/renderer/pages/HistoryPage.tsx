@@ -5,6 +5,7 @@ import { formatCurrency } from '../utils/currency';
 import { tableTotalFromOrders } from '../utils/totals';
 import { fetchClosedTables } from '../services/financeService';
 import { Table } from '../../shared/types';
+import { TableDetailPage } from './TableDetailPage';
 
 export const HistoryPage: React.FC = () => {
   const { restaurantId, recipes, tableGroups, userProfile, staffPermissions } = useFinance();
@@ -14,6 +15,7 @@ export const HistoryPage: React.FC = () => {
   const [historyDates, setHistoryDates] = useState<string[]>([]);
   const [historyTables, setHistoryTables] = useState<Record<string, Table[]>>({});
   const [isLoadingHistory, setIsLoadingHistory] = useState<Record<string, boolean>>({});
+  const [selectedTableId, setSelectedTableId] = useState<string | null>(null);
 
   useEffect(() => {
     const dates = [];
@@ -202,7 +204,7 @@ export const HistoryPage: React.FC = () => {
               <button
                 key={t.id}
                 className="history-card"
-                onClick={() => navigate(`/table/${t.id}`)}
+                onClick={() => setSelectedTableId(t.id)}
               >
                 <div className="history-card-left">
                   <span className="history-card-name">{t.name}</span>
@@ -262,6 +264,13 @@ export const HistoryPage: React.FC = () => {
           
           <div style={{ display: 'flex', justifyContent: 'center', marginTop: 24 }}>
             <button className="btn outline" onClick={loadMoreDates}>Daha eski günleri yükle</button>
+          </div>
+        </div>
+      )}
+      {selectedTableId && (
+        <div className="side-panel-backdrop" onClick={() => setSelectedTableId(null)}>
+          <div className="side-panel-content" onClick={(e) => e.stopPropagation()}>
+            <TableDetailPage tableId={selectedTableId} onClose={() => setSelectedTableId(null)} />
           </div>
         </div>
       )}

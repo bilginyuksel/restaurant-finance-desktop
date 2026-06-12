@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useFinance } from '../context/FinanceContext';
+import { fetchTableById } from '../services/financeService';
 import { ItemGrid } from '../components/ItemGrid';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { PaymentModal, PaymentPayload } from '../components/PaymentModal';
@@ -37,11 +38,13 @@ const variationsKey = (v?: SelectedVariation[]) => {
   return JSON.stringify(sorted);
 };
 
-export const TableDetailPage: React.FC = () => {
-  const { id } = useParams<{ id: string }>();
+export const TableDetailPage: React.FC<{ tableId?: string; onClose?: () => void }> = ({ tableId: propTableId, onClose }) => {
+  const params = useParams<{ id: string }>();
+  const id = propTableId || params.id;
   const navigate = useNavigate();
   const location = useLocation();
   const { tables, recipes, recipesById, categories, updateTable, deleteTable, addTable, user, userProfile, restaurantId, staffPermissions, tableLayout, tableGroups, warehouses, stocks, defaultWarehouseId, updateStock, recordStockMovement } = useFinance();
+
 
 
   // Draft mode: TablesPage navigates here with a pre-generated `t_*` ID and
@@ -90,15 +93,18 @@ export const TableDetailPage: React.FC = () => {
     };
   }, [draft, id]);
 
+  const [historyTable, setHistoryTable] = useState<Table | null>(null);
+
   const table = useMemo(
-    () => tables.find((t) => t.id === id) || draftTable || presetTable,
-    [tables, id, draftTable, presetTable],
+    () => tables.find((t) => t.id === id) || draftTable || presetTable || historyTable,
+    [tables, id, draftTable, presetTable, historyTable],
   );
   const [basket, setBasket] = useState<TableItem[]>([]);
   const [weightModal, setWeightModal] = useState<{ recipe: Recipe; value: string; target: 'basket' | 'edit', variations?: SelectedVariation[] } | null>(null);
   const [variationModal, setVariationModal] = useState<{ recipe: Recipe; target: 'basket' | 'edit' } | null>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [reopenConfirm, setReopenConfirm] = useState(false);
   const [prepayConfirm, setPrepayConfirm] = useState(false);
   const [closeSettledConfirm, setCloseSettledConfirm] = useState(false);
   const [editingTableName, setEditingTableName] = useState(false);
@@ -133,18 +139,47 @@ export const TableDetailPage: React.FC = () => {
     return g ? `/tables?group=${encodeURIComponent(g)}` : '/tables';
   }, [table?.group]);
 
+  const handleClose = () => {
+    if (onClose) onClose();
+    else navigate(backTo);
+  };
+
+
   useEffect(() => {
     // Draft and preset paths always synthesize a table, so `table` is truthy
     // and this guard is skipped naturally. For real IDs that don't resolve
     // (e.g. a stale URL), give the snapshot a brief window to deliver before
     // declaring the table missing.
     if (tables.length === 0 || table || isPreset || draft) return;
+
+    let isMounted = true;
+    if (id && restaurantId && !historyTable) {
+      fetchTableById(restaurantId, id).then(t => {
+        if (!isMounted) return;
+        if (t) {
+          setHistoryTable(t);
+        } else {
+          toastError('Masa bulunamadı');
+          if (onClose) onClose(); else navigate('/tables');
+        }
+      }).catch(err => {
+        if (!isMounted) return;
+        console.error("Failed to fetch table:", err);
+        toastError('Masa bulunamadı');
+        if (onClose) onClose(); else navigate('/tables');
+      });
+      return () => { isMounted = false; };
+    }
+
     const timer = setTimeout(() => {
       toastError('Masa bulunamadı');
-      navigate('/tables');
+      if (onClose) onClose(); else navigate('/tables');
     }, 600);
-    return () => clearTimeout(timer);
-  }, [tables, table, navigate, isPreset, draft]);
+    return () => {
+      clearTimeout(timer);
+      isMounted = false;
+    };
+  }, [tables, table, navigate, isPreset, draft, id, restaurantId, historyTable, onClose]);
 
   // If the table reloads and the order being edited no longer exists, drop edit state.
   useEffect(() => {
@@ -873,7 +908,7 @@ export const TableDetailPage: React.FC = () => {
       if (fullyPaid) {
         deductTableStock(next);
         toastSuccess('Masa tamamen ödendi ve kapatıldı');
-        navigate(backTo);
+        handleClose();
       } else {
         const remaining = Math.max(0, totalAfter - grossPaidAfter);
         toastSuccess(`${formatCurrency(tx.amount)} tahsil edildi · Kalan ${formatCurrency(remaining)}`);
@@ -911,7 +946,7 @@ export const TableDetailPage: React.FC = () => {
       }
       deductTableStock(next);
       toastSuccess('Masa kapatıldı');
-      navigate(backTo);
+      handleClose();
     } catch (err) {
       console.error(err);
       toastError('Masa kapatılamadı');
@@ -926,7 +961,7 @@ export const TableDetailPage: React.FC = () => {
     }
     try {
       await deleteTable(table.id);
-      navigate(backTo);
+      handleClose();
     } catch (err) {
       console.error(err);
       toastError('Masa silinemedi');
@@ -963,6 +998,94 @@ export const TableDetailPage: React.FC = () => {
     }
   };
 
+  const handleReopen = async () => {
+    if (!table) return;
+    if (userProfile?.role !== 'admin') {
+      toastError('Sadece adminler masa açabilir');
+      return;
+    }
+
+    const isNameActive = tables.some((t) => t.status === 'active' && t.name === table.name && t.id !== table.id);
+    if (isNameActive) {
+      toastError(`Masa ${table.name} şu an aktif. Önce aktif masayı kapatınız.`);
+      return;
+    }
+
+    setReopenConfirm(true);
+  };
+
+  const confirmReopen = () => runExclusive(async () => {
+    if (!table) return;
+    setReopenConfirm(false);
+
+    const { closedAt, transactions, paymentMethod, ...rest } = table;
+    const resetOrders = (table.orders || []).map((o) => ({
+      ...o,
+      items: o.items.map((i) => {
+        const { paymentStatus, ...itemRest } = i;
+        return { ...itemRest, paymentStatus: 'pending' as const };
+      }),
+    }));
+
+    const tableToUpdate: Table = {
+      ...rest,
+      status: 'active',
+      orders: resetOrders,
+      transactions: [],
+    };
+
+    try {
+      await updateTable(tableToUpdate);
+
+      let warehouseToRestore = defaultWarehouseId || (warehouses.length > 0 ? warehouses[0].id : null);
+      if (table.group) {
+        const group = tableGroups.find((g) => g.id === table.group);
+        if (group?.warehouseId) {
+          warehouseToRestore = group.warehouseId;
+        }
+      }
+
+      if (warehouseToRestore) {
+        const allItems = (table.orders || []).flatMap((o) => o.items);
+        const productQuantities: Record<string, number> = {};
+        allItems.forEach((item) => {
+          productQuantities[item.recipeId] = (productQuantities[item.recipeId] || 0) + item.quantity;
+          if (item.selectedVariations) {
+            item.selectedVariations.forEach((variation) => {
+              if (variation.selectedProducts) {
+                variation.selectedProducts.forEach((sel) => {
+                  productQuantities[sel.productId] = (productQuantities[sel.productId] || 0) + item.quantity;
+                });
+              }
+            });
+          }
+        });
+
+        Object.entries(productQuantities).forEach(([productId, qty]) => {
+          const stock = stocks.find(
+            (s) => s.productId === productId && s.warehouseId === warehouseToRestore
+          );
+          if (stock) {
+            updateStock({ ...stock, quantity: stock.quantity + qty });
+            recordStockMovement({
+              id: newId('sm'),
+              warehouseId: warehouseToRestore,
+              productId,
+              quantityChange: qty,
+              reason: 'manual',
+              referenceId: table.id,
+            });
+          }
+        });
+      }
+
+      toastSuccess('Masa tekrar açıldı');
+    } catch (err) {
+      console.error(err);
+      toastError('Masa tekrar açılamadı');
+    }
+  });
+
   // ---------- hotkeys ----------
   useHotkeys(
     'enter',
@@ -975,7 +1098,7 @@ export const TableDetailPage: React.FC = () => {
   useHotkeys('p', () => void printCustomerBill(), { enableOnFormTags: false });
   useHotkeys('escape', () => {
     if (edit) cancelEdit();
-    else navigate(backTo);
+    else handleClose();
   });
 
   if (!table) return <div className="empty-state">Yükleniyor…</div>;
@@ -1007,11 +1130,16 @@ export const TableDetailPage: React.FC = () => {
       <div className="closed-table-view">
         {/* Header */}
         <div className="flex-row closed-table-header">
-          <button className="btn small" onClick={() => navigate('/history')}>← Geri</button>
+          <button className="btn small" onClick={() => onClose ? onClose() : navigate('/history')}>← Geri</button>
           <h2 style={{ margin: 0 }}>Masa {table.name}</h2>
           <span className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)', fontSize: 12 }}>
             Kapalı
           </span>
+          {userProfile?.role === 'admin' && (
+            <button className="btn small outline" style={{ marginLeft: 8 }} onClick={handleReopen}>
+              Masayı Tekrar Aç
+            </button>
+          )}
           {/* Top-line payment summary: show split if mixed, otherwise the single method. */}
           {cashTotal > 0 && cardTotal > 0 ? (
             <span className="muted" style={{ fontSize: 13 }}>
@@ -1208,6 +1336,15 @@ export const TableDetailPage: React.FC = () => {
             </div>
           </div>
         )}
+
+        <ConfirmModal
+          open={reopenConfirm}
+          title="Masayı Tekrar Aç"
+          message="Bu masa tekrar aktif edilecek. Ödeme işlemleri geri alınacak ve masa bakiyesi tekrar açık hale gelecek."
+          confirmLabel="Tekrar Aç"
+          onConfirm={() => void confirmReopen()}
+          onCancel={() => setReopenConfirm(false)}
+        />
       </div>
     );
   }
@@ -1232,7 +1369,7 @@ export const TableDetailPage: React.FC = () => {
     <div className="detail-split-3">
       <div className="detail-main">
         <div className="flex-row">
-          <button className="btn small" onClick={() => navigate(backTo)}>← Geri</button>
+          <button className="btn small" onClick={handleClose}>← Geri</button>
           <h2 style={{ margin: 0 }}>Masa {table.name}</h2>
           {table.group && tableGroups.find((g) => g.id === table.group) && (
             <span className="badge" style={{ background: 'var(--surface-2)', color: 'var(--text-muted)' }}>

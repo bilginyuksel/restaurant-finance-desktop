@@ -16,13 +16,41 @@ import { authApi } from './firebase/auth';
 import { AUDIT_ALLOWLIST } from '../shared/types';
 
 export const App: React.FC = () => {
-  const { user, authReady, tableGroups, tables } = useFinance();
+  const { user, authReady, tableGroups, tables, restaurantId } = useFinance();
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const selectedGroup = searchParams.get('group') ?? '__all__';
   const activeTables = tables.filter((t) => t.status !== 'closed');
   const canSeeAudit = !!user?.email && (AUDIT_ALLOWLIST as readonly string[]).includes(user.email);
+
+  React.useEffect(() => {
+    if (!user || !restaurantId) return;
+
+    let presenceService: import('./services/DesktopPresenceService').DesktopPresenceService;
+    let printJobListener: import('./services/PrintJobListener').PrintJobListener;
+
+    const initServices = async () => {
+      const { DesktopPresenceService } = await import('./services/DesktopPresenceService');
+      const { PrintJobListener } = await import('./services/PrintJobListener');
+      
+      const tag = await window.api.deviceTag();
+      if (!tag) return;
+
+      presenceService = new DesktopPresenceService(restaurantId, tag);
+      printJobListener = new PrintJobListener(restaurantId, tag);
+
+      presenceService.start();
+      printJobListener.start();
+    };
+
+    initServices();
+
+    return () => {
+      presenceService?.stop();
+      printJobListener?.stop();
+    };
+  }, [user, restaurantId]);
 
   if (!authReady) {
     return <div className="empty-state">Yükleniyor…</div>;

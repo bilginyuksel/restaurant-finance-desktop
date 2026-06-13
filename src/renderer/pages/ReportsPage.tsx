@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { useFinance } from '../context/FinanceContext';
 import { formatCurrency } from '../utils/currency';
 import { itemPrice, recipeName, recipeUnitLabel } from '../utils/totals';
@@ -7,6 +7,9 @@ import { Table } from '../../shared/types';
 import { listenToClosedTables } from '../services/financeService';
 
 export const ReportsPage: React.FC = () => {
+  const [filterCategories, setFilterCategories] = useState<string[]>([]);
+  const [filterProducts, setFilterProducts] = useState<string[]>([]);
+  const isFiltered = filterCategories.length > 0 || filterProducts.length > 0;
   const { restaurantId, recipesById, tableGroups, ingredients, expenses } = useFinance();
   const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'this_week' | 'this_month' | 'custom'>('today');
   const [customDateRange, setCustomDateRange] = useState({ start: '', end: '' });
@@ -82,6 +85,8 @@ export const ReportsPage: React.FC = () => {
 
   useEffect(() => {
     setSelectedCategory('all');
+    setFilterCategories([]);
+    setFilterProducts([]);
   }, [dateFilter, customDateRange]);
 
   const calculateReport = (groupTables: Table[]) => {
@@ -95,66 +100,71 @@ export const ReportsPage: React.FC = () => {
     const groupRevenueMap = new Map<string, { netRevenue: number; grossRevenue: number; cash: number; card: number; discount: number; cost: number }>();
     const categoryRevenueMap = new Map<string, number>();
 
+    const isFiltered = filterCategories.length > 0 || filterProducts.length > 0;
+    
     for (const t of groupTables) {
-      const txs = t.transactions || [];
-      const tableNet = txs.reduce((sum, tx) => sum + tx.amount, 0);
-      const tableCash = txs.filter(tx => tx.paymentMethod === 'cash').reduce((sum, tx) => sum + tx.amount, 0);
-      const tableCard = txs.filter(tx => tx.paymentMethod === 'credit_card').reduce((sum, tx) => sum + tx.amount, 0);
-      const tableDiscount = txs.reduce((sum, tx) => sum + (tx.discount || 0), 0);
-      
-      totalCash += tableCash;
-      totalCard += tableCard;
-      totalDiscount += tableDiscount;
-
       const groupId = t.group || '__other__';
       const groupData = groupRevenueMap.get(groupId) || { netRevenue: 0, grossRevenue: 0, cash: 0, card: 0, discount: 0, cost: 0 };
-      groupData.netRevenue += tableNet;
-      groupData.cash += tableCash;
-      groupData.card += tableCard;
-      groupData.discount += tableDiscount;
 
-      const tableGross = (t.orders || []).reduce((sum, order) => {
-        return sum + (order.items || []).reduce((itemSum, item) => {
-          return itemSum + (itemPrice(item, recipesById) * item.quantity);
-        }, 0);
-      }, 0);
-      grossTotal += tableGross;
-      groupData.grossRevenue += tableGross;
+      if (!isFiltered) {
+        const txs = t.transactions || [];
+        const tableNet = txs.reduce((sum, tx) => sum + tx.amount, 0);
+        const tableCash = txs.filter(tx => tx.paymentMethod === 'cash').reduce((sum, tx) => sum + tx.amount, 0);
+        const tableCard = txs.filter(tx => tx.paymentMethod === 'credit_card').reduce((sum, tx) => sum + tx.amount, 0);
+        const tableDiscount = txs.reduce((sum, tx) => sum + (tx.discount || 0), 0);
+        
+        totalCash += tableCash;
+        totalCard += tableCard;
+        totalDiscount += tableDiscount;
 
-      // Products
+        groupData.netRevenue += tableNet;
+        groupData.cash += tableCash;
+        groupData.card += tableCard;
+        groupData.discount += tableDiscount;
+      }
+
+      let tableGrossFiltered = 0;
+
       for (const order of (t.orders || [])) {
         for (const item of (order.items || [])) {
-          const rName = recipeName(item.recipeId, recipesById);
-          const rUnit = recipeUnitLabel(item.recipeId, recipesById) || 'Adet';
           const recipe = recipesById.get(item.recipeId);
           const categoryName = recipe?.category || 'Kategorisiz';
 
-          const itemRevenue = itemPrice(item, recipesById) * item.quantity;
-          
-          const itemCost = recipe?.ingredients?.reduce((sum, ingItem) => {
-            const ingredient = ingredients.find((i) => i.id === ingItem.ingredientId);
-            return sum + (ingredient ? ingredient.cost * ingItem.amount : 0);
-          }, 0) || 0;
-          const totalItemCost = itemCost * item.quantity;
-          
-          totalFoodCost += totalItemCost;
-          groupData.cost += totalItemCost;
+          let mainItemMatches = true;
+          if (isFiltered) {
+            const catMatch = filterCategories.length === 0 || filterCategories.includes(categoryName);
+            const prodMatch = filterProducts.length === 0 || filterProducts.includes(item.recipeId);
+            mainItemMatches = catMatch && prodMatch;
+          }
 
-          categoryRevenueMap.set(categoryName, (categoryRevenueMap.get(categoryName) || 0) + itemRevenue);
+          if (mainItemMatches) {
+            const rName = recipeName(item.recipeId, recipesById);
+            const rUnit = recipeUnitLabel(item.recipeId, recipesById) || 'Adet';
 
-          // Key by recipeId so the same product is always grouped into one row
-          // regardless of which variation options were chosen — matches mobile behaviour.
-          const productKey = item.recipeId;
+            const itemRevenue = itemPrice(item, recipesById) * item.quantity;
+            tableGrossFiltered += itemRevenue;
+            
+            const itemCost = recipe?.ingredients?.reduce((sum, ingItem) => {
+              const ingredient = ingredients.find((i) => i.id === ingItem.ingredientId);
+              return sum + (ingredient ? ingredient.cost * ingItem.amount : 0);
+            }, 0) || 0;
+            const totalItemCost = itemCost * item.quantity;
+            
+            totalFoodCost += totalItemCost;
+            groupData.cost += totalItemCost;
 
-          const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: rName, unit: rUnit, category: categoryName, cost: 0, profit: 0 };
-          existing.quantity += item.quantity;
-          existing.amount += itemRevenue;
-          existing.cost += totalItemCost;
-          existing.profit += (itemRevenue - totalItemCost);
-          productMap.set(productKey, existing);
+            categoryRevenueMap.set(categoryName, (categoryRevenueMap.get(categoryName) || 0) + itemRevenue);
 
-          // Also count variation-linked products (e.g. Coke/Sprite chosen as a drink variation)
-          // These are real recipes that should appear as separate sold items in reports.
+            const productKey = item.recipeId;
+            const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: rName, unit: rUnit, category: categoryName, cost: 0, profit: 0 };
+            existing.quantity += item.quantity;
+            existing.amount += itemRevenue;
+            existing.cost += totalItemCost;
+            existing.profit += (itemRevenue - totalItemCost);
+            productMap.set(productKey, existing);
+          }
+
+          // Process variations independently of the main item's filter
           if (item.selectedVariations) {
             for (const variation of item.selectedVariations) {
               if (variation.selectedProducts) {
@@ -165,30 +175,40 @@ export const ReportsPage: React.FC = () => {
                   const vpUnit = recipeUnitLabel(sel.productId, recipesById) || 'Adet';
                   const vpCategory = varProduct.category || 'Kategorisiz';
                   
-                  const vpCost = varProduct.ingredients?.reduce((sum, ingItem) => {
-                    const ingredient = ingredients.find((i) => i.id === ingItem.ingredientId);
-                    return sum + (ingredient ? ingredient.cost * ingItem.amount : 0);
-                  }, 0) || 0;
-                  const totalVpCost = vpCost * item.quantity;
-                  
-                  totalFoodCost += totalVpCost;
-                  groupData.cost += totalVpCost;
-                  
-                  // Key by productId so multiple tables all roll up into the same linked-product row
-                  const vpKey = sel.productId;
-                  const vpExisting = productMap.get(vpKey) || { quantity: 0, amount: 0, name: vpName, unit: vpUnit, category: vpCategory, cost: 0, profit: 0 };
-                  vpExisting.quantity += item.quantity;
-                  // Variation products are included in the main item price; no extra revenue
-                  vpExisting.amount += 0;
-                  vpExisting.cost += totalVpCost;
-                  vpExisting.profit -= totalVpCost;
-                  productMap.set(vpKey, vpExisting);
+                  let vpMatches = true;
+                  if (isFiltered) {
+                    const vpCatMatch = filterCategories.length === 0 || filterCategories.includes(vpCategory);
+                    const vpProdMatch = filterProducts.length === 0 || filterProducts.includes(sel.productId);
+                    vpMatches = vpCatMatch && vpProdMatch;
+                  }
+
+                  if (vpMatches) {
+                    const vpCost = varProduct.ingredients?.reduce((sum, ingItem) => {
+                      const ingredient = ingredients.find((i) => i.id === ingItem.ingredientId);
+                      return sum + (ingredient ? ingredient.cost * ingItem.amount : 0);
+                    }, 0) || 0;
+                    const totalVpCost = vpCost * item.quantity;
+                    
+                    totalFoodCost += totalVpCost;
+                    groupData.cost += totalVpCost;
+                    
+                    const vpKey = sel.productId;
+                    const vpExisting = productMap.get(vpKey) || { quantity: 0, amount: 0, name: vpName, unit: vpUnit, category: vpCategory, cost: 0, profit: 0 };
+                    vpExisting.quantity += item.quantity;
+                    vpExisting.amount += 0;
+                    vpExisting.cost += totalVpCost;
+                    vpExisting.profit -= totalVpCost;
+                    productMap.set(vpKey, vpExisting);
+                  }
                 }
               }
             }
           }
         }
       }
+      
+      grossTotal += tableGrossFiltered;
+      groupData.grossRevenue += tableGrossFiltered;
       groupRevenueMap.set(groupId, groupData);
     }
 
@@ -236,10 +256,11 @@ export const ReportsPage: React.FC = () => {
       case 'yesterday': return `Dün (${formatDate(currentRange.start)})`;
       case 'this_week': return `Bu Hafta (${formatShortDate(currentRange.start)} - ${formatShortDate(currentRange.end)})`;
       case 'this_month': return `Bu Ay (${formatShortDate(currentRange.start)} - ${formatShortDate(currentRange.end)})`;
-      case 'custom': 
+      case 'custom': {
         const s = customDateRange.start ? formatShortDate(currentRange.start) : '...';
         const e = customDateRange.end ? formatShortDate(currentRange.end) : '...';
         return `Özel Tarih (${s} - ${e})`;
+      }
       default: return '';
     }
   };
@@ -248,6 +269,18 @@ export const ReportsPage: React.FC = () => {
     if (!report) return [];
     return Array.from(new Set(report.products.map(p => p.category))).sort();
   }, [report]);
+
+  const allCategories = useMemo(() => {
+    const cats = new Set<string>();
+    recipesById.forEach(r => {
+      if (r.category) cats.add(r.category);
+    });
+    return Array.from(cats).sort();
+  }, [recipesById]);
+
+  const allProductsList = useMemo(() => {
+    return Array.from(recipesById.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [recipesById]);
 
   const filteredProducts = useMemo(() => {
     if (!report) return [];
@@ -310,7 +343,56 @@ export const ReportsPage: React.FC = () => {
               />
             </div>
           </div>
+        
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+          <h3 style={{ margin: '0 0 16px 0', fontSize: 16 }}>Gelişmiş Filtreler</h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }} className="muted">Kategori Filtresi</label>
+              <select 
+                multiple
+                className="input" 
+                style={{ width: '100%', minHeight: 120 }}
+                value={filterCategories}
+                onChange={e => {
+                  const options = Array.from(e.target.options);
+                  setFilterCategories(options.filter(o => o.selected).map(o => o.value));
+                }}
+              >
+                {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <div style={{ fontSize: 11, marginTop: 4, color: 'var(--text-muted)' }}>Birden fazla seçmek için basılı tutun (Cmd/Ctrl)</div>
+            </div>
+            <div>
+              <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }} className="muted">Ürün Filtresi</label>
+              <select 
+                multiple
+                className="input" 
+                style={{ width: '100%', minHeight: 150 }}
+                value={filterProducts}
+                onChange={e => {
+                  const options = Array.from(e.target.options);
+                  setFilterProducts(options.filter(o => o.selected).map(o => o.value));
+                }}
+              >
+                {allProductsList
+                  .filter(p => filterCategories.length === 0 || filterCategories.includes(p.category || 'Kategorisiz'))
+                  .map(p => <option key={p.id} value={p.id}>{p.name}</option>)
+                }
+              </select>
+            </div>
+            {(filterCategories.length > 0 || filterProducts.length > 0) && (
+              <button 
+                className="btn outline" 
+                onClick={() => { setFilterCategories([]); setFilterProducts([]); }}
+                style={{ marginTop: 8 }}
+              >
+                Filtreleri Temizle
+              </button>
+            )}
+          </div>
         </div>
+      </div>
       </div>
 
       {/* Main content */}
@@ -322,6 +404,8 @@ export const ReportsPage: React.FC = () => {
         ) : report ? (
           <>
             <h2 style={{ margin: 0 }}>Rapor: {getReportLabel()}</h2>
+            {isFiltered && <div style={{ background: 'var(--warn-bg, #fff8c5)', color: 'var(--warn, #b06d00)', padding: '8px 12px', borderRadius: 6, fontSize: 14 }}>Gelişmiş filtre aktif. Tahsilat detayları masaya ait olduğu için bu görünümde gizlenmiştir.</div>}
+            
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
               <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
@@ -338,15 +422,15 @@ export const ReportsPage: React.FC = () => {
               </div>
               <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
                 <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>İndirimler</div>
-                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--warn, #b06d00)' }}>−{formatCurrency(report.totalDiscount)}</div>
+                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--warn, #b06d00)' }}>−{isFiltered ? 'N/A' : formatCurrency(report.totalDiscount)}</div>
               </div>
               <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
                 <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Nakit Tahsilat</div>
-                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--success, #2da44e)' }}>{formatCurrency(report.totalCash)}</div>
+                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--success, #2da44e)' }}>{isFiltered ? 'N/A' : formatCurrency(report.totalCash)}</div>
               </div>
               <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
                 <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Kredi Kartı Tahsilat</div>
-                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--info, #1f6feb)' }}>{formatCurrency(report.totalCard)}</div>
+                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--info, #1f6feb)' }}>{isFiltered ? 'N/A' : formatCurrency(report.totalCard)}</div>
               </div>
               <div className="card" style={{ padding: 16, background: 'var(--surface-1)', borderRadius: 8, border: '1px solid var(--border)' }}>
                 <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Net Kâr</div>
@@ -355,6 +439,8 @@ export const ReportsPage: React.FC = () => {
                 </div>
               </div>
             </div>
+
+
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: 16 }}>
               <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
@@ -368,7 +454,7 @@ export const ReportsPage: React.FC = () => {
                         cy="50%"
                         outerRadius={100}
                         innerRadius={60}
-                        dataKey="amount"
+                        dataKey="grossRevenue"
                         nameKey="name"
                         label={({ name, percent }) => `${name} (${((percent || 0) * 100).toFixed(0)}%)`}
                       >
@@ -495,9 +581,9 @@ export const ReportsPage: React.FC = () => {
                         <td style={{ padding: '12px 16px' }}>{g.name}</td>
                         <td style={{ padding: '12px 16px', textAlign: 'right' }}>{formatCurrency(g.netRevenue)}</td>
                         <td style={{ padding: '12px 16px', textAlign: 'right' }}>{formatCurrency(g.grossRevenue)}</td>
-                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--warn, #b06d00)' }}>{formatCurrency(g.discount)}</td>
-                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--success, #2da44e)' }}>{formatCurrency(g.cash)}</td>
-                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--info, #1f6feb)' }}>{formatCurrency(g.card)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--warn, #b06d00)' }}>{isFiltered ? 'N/A' : formatCurrency(g.discount)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--success, #2da44e)' }}>{isFiltered ? 'N/A' : formatCurrency(g.cash)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--info, #1f6feb)' }}>{isFiltered ? 'N/A' : formatCurrency(g.card)}</td>
                         <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--danger, #cf222e)' }}>{formatCurrency(g.cost)}</td>
                       </tr>
                     ))}

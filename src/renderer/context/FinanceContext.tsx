@@ -25,6 +25,8 @@ import {
   Warehouse,
   Stock,
   StockMovement,
+  Ingredient,
+  Expense,
 } from '../../shared/types';
 
 interface FinanceContextType {
@@ -40,6 +42,8 @@ interface FinanceContextType {
    * O(n) per call and gets invoked hundreds of times per render.
    */
   recipesById: ReadonlyMap<string, Recipe>;
+  ingredients: Ingredient[];
+  expenses: Expense[];
   categories: string[];
   tables: Table[];
   tableGroups: TableGroup[];
@@ -99,6 +103,8 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
   const [tableGroups, setTableGroups] = useState<TableGroup[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [stocks, setStocks] = useState<Stock[]>([]);
+  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
   const [defaultWarehouseId, setDefaultWarehouseId] = useState<string | null>(null);
   const [staffPermissions, setStaffPermissions] = useState<StaffPermissions | null>(null);
   const [tableLayout, setTableLayoutState] = useState<TableLayout | null>(null);
@@ -179,6 +185,8 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
       setTableGroups([]);
       setWarehouses([]);
       setStocks([]);
+      setIngredients([]);
+      setExpenses([]);
       setDefaultWarehouseId(null);
       setStaffPermissions(null);
       return;
@@ -189,7 +197,7 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     const unsubscribers: Unsubscribe[] = [];
     const writeFlags: Record<string, boolean> = {};
     // The collections whose server confirmation we wait for.
-    const EXPECTED_KEYS = ['recipes', 'tables', 'tableGroups', 'categories', 'warehouses', 'stocks'] as const;
+    const EXPECTED_KEYS = ['recipes', 'tables', 'tableGroups', 'categories', 'warehouses', 'stocks', 'ingredients', 'expenses'] as const;
     const serverConfirmed = new Set<string>();
 
     const update = (key: string, snapshot: { metadata: { hasPendingWrites: boolean; fromCache: boolean } }) => {
@@ -230,6 +238,8 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
     subscribe<Table>('tables', setTables, [where("status", "==", "active")]);
     subscribe<Warehouse>('warehouses', setWarehouses);
     subscribe<Stock>('stocks', setStocks);
+    subscribe<Ingredient>('ingredients', setIngredients);
+    subscribe<Expense>('expenses', setExpenses);
     subscribe<TableGroup>('tableGroups', (groups) =>
       setTableGroups([...groups].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))),
     );
@@ -489,6 +499,8 @@ export const FinanceProvider = ({ children }: { children: ReactNode }) => {
         userProfile,
         restaurantId,
         recipes,
+        ingredients,
+        expenses,
         recipesById,
         categories,
         tables,

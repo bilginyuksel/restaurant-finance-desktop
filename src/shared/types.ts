@@ -75,6 +75,17 @@ export interface Ingredient extends BaseResource {
   cost: number;
 }
 
+export interface Expense extends BaseResource {
+  id: string;
+  name: string;
+  description?: string;
+  type: "fixed" | "staff";
+  amount: number;
+  frequency: "monthly";
+  dailyRate?: number;
+  daysWorked?: number;
+}
+
 export interface RecipeIngredient {
   ingredientId: string;
   amount: number;

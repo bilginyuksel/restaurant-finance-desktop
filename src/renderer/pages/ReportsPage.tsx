@@ -7,7 +7,7 @@ import { Table } from '../../shared/types';
 import { listenToClosedTables } from '../services/financeService';
 
 export const ReportsPage: React.FC = () => {
-  const { restaurantId, recipesById, tableGroups } = useFinance();
+  const { restaurantId, recipesById, tableGroups, ingredients, expenses } = useFinance();
   const [dateFilter, setDateFilter] = useState<'today' | 'yesterday' | 'this_week' | 'this_month' | 'custom'>('today');
   const [customDateRange, setCustomDateRange] = useState({ start: '', end: '' });
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -89,20 +89,29 @@ export const ReportsPage: React.FC = () => {
     let totalCard = 0;
     let totalDiscount = 0;
     let grossTotal = 0; // Total before discount
+    let totalFoodCost = 0;
 
-    const productMap = new Map<string, { quantity: number; amount: number; name: string; unit: string; category: string }>();
-    const groupRevenueMap = new Map<string, number>();
+    const productMap = new Map<string, { quantity: number; amount: number; name: string; unit: string; category: string; cost: number; profit: number }>();
+    const groupRevenueMap = new Map<string, { netRevenue: number; grossRevenue: number; cash: number; card: number; discount: number; cost: number }>();
     const categoryRevenueMap = new Map<string, number>();
 
     for (const t of groupTables) {
       const txs = t.transactions || [];
       const tableNet = txs.reduce((sum, tx) => sum + tx.amount, 0);
-      totalCash += txs.filter(tx => tx.paymentMethod === 'cash').reduce((sum, tx) => sum + tx.amount, 0);
-      totalCard += txs.filter(tx => tx.paymentMethod === 'credit_card').reduce((sum, tx) => sum + tx.amount, 0);
-      totalDiscount += txs.reduce((sum, tx) => sum + (tx.discount || 0), 0);
+      const tableCash = txs.filter(tx => tx.paymentMethod === 'cash').reduce((sum, tx) => sum + tx.amount, 0);
+      const tableCard = txs.filter(tx => tx.paymentMethod === 'credit_card').reduce((sum, tx) => sum + tx.amount, 0);
+      const tableDiscount = txs.reduce((sum, tx) => sum + (tx.discount || 0), 0);
+      
+      totalCash += tableCash;
+      totalCard += tableCard;
+      totalDiscount += tableDiscount;
 
       const groupId = t.group || '__other__';
-      groupRevenueMap.set(groupId, (groupRevenueMap.get(groupId) || 0) + tableNet);
+      const groupData = groupRevenueMap.get(groupId) || { netRevenue: 0, grossRevenue: 0, cash: 0, card: 0, discount: 0, cost: 0 };
+      groupData.netRevenue += tableNet;
+      groupData.cash += tableCash;
+      groupData.card += tableCard;
+      groupData.discount += tableDiscount;
 
       const tableGross = (t.orders || []).reduce((sum, order) => {
         return sum + (order.items || []).reduce((itemSum, item) => {
@@ -110,6 +119,7 @@ export const ReportsPage: React.FC = () => {
         }, 0);
       }, 0);
       grossTotal += tableGross;
+      groupData.grossRevenue += tableGross;
 
       // Products
       for (const order of (t.orders || [])) {
@@ -120,6 +130,15 @@ export const ReportsPage: React.FC = () => {
           const categoryName = recipe?.category || 'Kategorisiz';
 
           const itemRevenue = itemPrice(item, recipesById) * item.quantity;
+          
+          const itemCost = recipe?.ingredients?.reduce((sum, ingItem) => {
+            const ingredient = ingredients.find((i) => i.id === ingItem.ingredientId);
+            return sum + (ingredient ? ingredient.cost * ingItem.amount : 0);
+          }, 0) || 0;
+          const totalItemCost = itemCost * item.quantity;
+          
+          totalFoodCost += totalItemCost;
+          groupData.cost += totalItemCost;
 
           categoryRevenueMap.set(categoryName, (categoryRevenueMap.get(categoryName) || 0) + itemRevenue);
 
@@ -127,9 +146,11 @@ export const ReportsPage: React.FC = () => {
           // regardless of which variation options were chosen — matches mobile behaviour.
           const productKey = item.recipeId;
 
-          const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: rName, unit: rUnit, category: categoryName };
+          const existing = productMap.get(productKey) || { quantity: 0, amount: 0, name: rName, unit: rUnit, category: categoryName, cost: 0, profit: 0 };
           existing.quantity += item.quantity;
           existing.amount += itemRevenue;
+          existing.cost += totalItemCost;
+          existing.profit += (itemRevenue - totalItemCost);
           productMap.set(productKey, existing);
 
           // Also count variation-linked products (e.g. Coke/Sprite chosen as a drink variation)
@@ -143,12 +164,24 @@ export const ReportsPage: React.FC = () => {
                   const vpName = varProduct.name;
                   const vpUnit = recipeUnitLabel(sel.productId, recipesById) || 'Adet';
                   const vpCategory = varProduct.category || 'Kategorisiz';
+                  
+                  const vpCost = varProduct.ingredients?.reduce((sum, ingItem) => {
+                    const ingredient = ingredients.find((i) => i.id === ingItem.ingredientId);
+                    return sum + (ingredient ? ingredient.cost * ingItem.amount : 0);
+                  }, 0) || 0;
+                  const totalVpCost = vpCost * item.quantity;
+                  
+                  totalFoodCost += totalVpCost;
+                  groupData.cost += totalVpCost;
+                  
                   // Key by productId so multiple tables all roll up into the same linked-product row
                   const vpKey = sel.productId;
-                  const vpExisting = productMap.get(vpKey) || { quantity: 0, amount: 0, name: vpName, unit: vpUnit, category: vpCategory };
+                  const vpExisting = productMap.get(vpKey) || { quantity: 0, amount: 0, name: vpName, unit: vpUnit, category: vpCategory, cost: 0, profit: 0 };
                   vpExisting.quantity += item.quantity;
                   // Variation products are included in the main item price; no extra revenue
                   vpExisting.amount += 0;
+                  vpExisting.cost += totalVpCost;
+                  vpExisting.profit -= totalVpCost;
                   productMap.set(vpKey, vpExisting);
                 }
               }
@@ -156,28 +189,40 @@ export const ReportsPage: React.FC = () => {
           }
         }
       }
+      groupRevenueMap.set(groupId, groupData);
     }
 
     const products = Array.from(productMap.values()).sort((a, b) => b.amount - a.amount);
     const topProducts = products.slice(0, 10);
 
     const groupRevenues = Array.from(groupRevenueMap.entries())
-      .map(([id, amount]) => {
+      .map(([id, data]) => {
         let name = 'Diğer';
         if (id === '__quick_sale__') name = 'Peşin Satış';
         else {
           const g = tableGroups.find(tg => tg.id === id);
           if (g) name = g.name;
         }
-        return { name, amount };
+        return { name, ...data };
       })
-      .sort((a, b) => b.amount - a.amount);
+      .sort((a, b) => b.netRevenue - a.netRevenue);
 
     const categoryRevenues = Array.from(categoryRevenueMap.entries())
       .map(([name, amount]) => ({ name, amount }))
       .sort((a, b) => b.amount - a.amount);
+      
+    const totalMonthlyExpenses = (expenses || []).reduce(
+      (sum, item) => sum + item.amount,
+      0,
+    );
+    const msInDay = 24 * 60 * 60 * 1000;
+    const daysInRange = Math.max(1, Math.round((currentRange.end.getTime() - currentRange.start.getTime()) / msInDay));
+    const dailyFixedCost = (totalMonthlyExpenses / 30) * daysInRange;
 
-    return { totalCash, totalCard, totalDiscount, grossTotal, products, topProducts, groupRevenues, categoryRevenues };
+    const grossProfit = (grossTotal - totalDiscount) - totalFoodCost;
+    const netProfit = grossProfit - dailyFixedCost;
+
+    return { totalCash, totalCard, totalDiscount, grossTotal, totalFoodCost, grossProfit, dailyFixedCost, netProfit, products, topProducts, groupRevenues, categoryRevenues };
   };
 
   const report = filteredTables.length > 0 ? calculateReport(filteredTables) : null;
@@ -284,6 +329,14 @@ export const ReportsPage: React.FC = () => {
                 <div style={{ fontSize: 24, fontWeight: 'bold' }}>{formatCurrency(report.grossTotal)}</div>
               </div>
               <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
+                <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Gıda Maliyeti</div>
+                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--danger, #cf222e)' }}>{formatCurrency(report.totalFoodCost)}</div>
+              </div>
+              <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
+                <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Sabit Gider (Günlük)</div>
+                <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--danger, #cf222e)' }}>{formatCurrency(report.dailyFixedCost)}</div>
+              </div>
+              <div className="card" style={{ padding: 16, background: 'var(--surface-2)', borderRadius: 8 }}>
                 <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>İndirimler</div>
                 <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--warn, #b06d00)' }}>−{formatCurrency(report.totalDiscount)}</div>
               </div>
@@ -296,8 +349,10 @@ export const ReportsPage: React.FC = () => {
                 <div style={{ fontSize: 24, fontWeight: 'bold', color: 'var(--info, #1f6feb)' }}>{formatCurrency(report.totalCard)}</div>
               </div>
               <div className="card" style={{ padding: 16, background: 'var(--surface-1)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Net Tahsilat</div>
-                <div style={{ fontSize: 24, fontWeight: 'bold' }}>{formatCurrency(report.totalCash + report.totalCard)}</div>
+                <div className="muted" style={{ fontSize: 13, marginBottom: 4 }}>Net Kâr</div>
+                <div style={{ fontSize: 24, fontWeight: 'bold', color: report.netProfit >= 0 ? 'var(--success, #2da44e)' : 'var(--danger, #cf222e)' }}>
+                  {formatCurrency(report.netProfit)}
+                </div>
               </div>
             </div>
 
@@ -387,6 +442,8 @@ export const ReportsPage: React.FC = () => {
                       {selectedCategory === 'all' && <th style={{ padding: '12px 16px', fontWeight: 600 }}>Kategori</th>}
                       <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Miktar</th>
                       <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Tutar</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Maliyet</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Kâr</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -402,12 +459,52 @@ export const ReportsPage: React.FC = () => {
                             : `${p.quantity % 1 !== 0 ? p.quantity.toFixed(2).replace('.', ',') : p.quantity} ${p.unit}`}
                         </td>
                         <td style={{ padding: '12px 16px', textAlign: 'right' }}>{formatCurrency(p.amount)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--danger, #cf222e)' }}>{formatCurrency(p.cost)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: p.profit >= 0 ? 'var(--success, #2da44e)' : 'var(--danger, #cf222e)' }}>
+                          {formatCurrency(p.profit)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
                 <div style={{ padding: 16 }} className="muted">Hiç ürün satılmamış.</div>
+              )}
+            </div>
+
+            <div className="card" style={{ borderRadius: 8, overflow: 'hidden' }}>
+              <div style={{ padding: '16px', borderBottom: '1px solid var(--border)' }}>
+                <h3 style={{ margin: 0 }}>Bölümlere Göre Analiz</h3>
+              </div>
+              {report.groupRevenues.length > 0 ? (
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--surface-2)', borderBottom: '1px solid var(--border)' }}>
+                      <th style={{ padding: '12px 16px', fontWeight: 600 }}>Bölüm</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Net Gelir</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Brüt Gelir</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>İndirim</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Nakit</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Kredi Kartı</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Maliyet</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.groupRevenues.map(g => (
+                      <tr key={g.name} style={{ borderBottom: '1px solid var(--border-light, var(--border))' }}>
+                        <td style={{ padding: '12px 16px' }}>{g.name}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>{formatCurrency(g.netRevenue)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right' }}>{formatCurrency(g.grossRevenue)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--warn, #b06d00)' }}>{formatCurrency(g.discount)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--success, #2da44e)' }}>{formatCurrency(g.cash)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--info, #1f6feb)' }}>{formatCurrency(g.card)}</td>
+                        <td style={{ padding: '12px 16px', textAlign: 'right', color: 'var(--danger, #cf222e)' }}>{formatCurrency(g.cost)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ padding: 16 }} className="muted">Bölüm verisi bulunamadı.</div>
               )}
             </div>
           </>

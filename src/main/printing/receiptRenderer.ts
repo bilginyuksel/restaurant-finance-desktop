@@ -10,7 +10,7 @@ export function renderCustomerBill(p: ThermalPrinter, r: ReceiptPayload): void {
   p.alignCenter();
   p.setTextDoubleHeight();
   p.bold(true);
-  p.println(s(r.restaurantName ?? 'RESTORAN'));
+  p.println(s(r.restaurantName ?? 'HobiPark'));
   p.bold(false);
   p.setTextNormal();
   p.println(s(`MASA ${r.tableName}`));

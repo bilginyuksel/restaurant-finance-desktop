@@ -54,28 +54,7 @@ export class PrintJobListener {
       // We use printCustomerBill for now, but could be printKitchenTicket based on kind
       let result;
       if (payload.kind === 'kitchen') {
-        if (!payload.orderNumber && jobData.payload.orderId) {
-          const next = await window.api.nextOrderNumber();
-          payload.orderNumber = next.orderNumber;
-          
-          try {
-            const tableRef = doc(db, 'restaurants', this.restaurantId, 'tables', jobData.tableId);
-            const tableSnap = await getDoc(tableRef);
-            if (tableSnap.exists()) {
-              const tableData = tableSnap.data();
-              const updatedOrders = (tableData.orders || []).map((o: any) => {
-                if (o.id === jobData.payload.orderId) {
-                  return { ...o, orderNumber: payload.orderNumber };
-                }
-                return o;
-              });
-              await updateDoc(tableRef, { orders: updatedOrders });
-            }
-          } catch (e) {
-            console.error('Failed to attach order number to table order', e);
-          }
-        }
-        result = await window.api.printKitchenTicket(payload);
+         result = await window.api.printKitchenTicket(payload);
       } else {
          result = await window.api.printCustomerBill(payload);
       }

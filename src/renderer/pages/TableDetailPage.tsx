@@ -147,10 +147,8 @@ export const TableDetailPage: React.FC<{ tableId?: string; onClose?: () => void 
 
   useEffect(() => {
     // Draft and preset paths always synthesize a table, so `table` is truthy
-    // and this guard is skipped naturally. For real IDs that don't resolve
-    // (e.g. a stale URL), give the snapshot a brief window to deliver before
-    // declaring the table missing.
-    if (tables.length === 0 || table || isPreset || draft) return;
+    // and this guard is skipped naturally.
+    if (table || isPreset || draft) return;
 
     let isMounted = true;
     if (id && restaurantId && !historyTable) {
@@ -170,16 +168,7 @@ export const TableDetailPage: React.FC<{ tableId?: string; onClose?: () => void 
       });
       return () => { isMounted = false; };
     }
-
-    const timer = setTimeout(() => {
-      toastError('Masa bulunamadı');
-      if (onClose) onClose(); else navigate('/tables');
-    }, 600);
-    return () => {
-      clearTimeout(timer);
-      isMounted = false;
-    };
-  }, [tables, table, navigate, isPreset, draft, id, restaurantId, historyTable, onClose]);
+  }, [table, navigate, isPreset, draft, id, restaurantId, historyTable, onClose]);
 
   // If the table reloads and the order being edited no longer exists, drop edit state.
   useEffect(() => {

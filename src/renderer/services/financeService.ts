@@ -6,7 +6,7 @@ export const fetchTableById = async (restaurantId: string, tableId: string): Pro
     const docRef = doc(db, 'restaurants', restaurantId, 'tables', tableId);
     const snapshot = await getDoc(docRef);
     if (snapshot.exists()) {
-        return snapshot.data() as Table;
+        return { id: snapshot.id, ...snapshot.data() } as Table;
     }
     return null;
 };

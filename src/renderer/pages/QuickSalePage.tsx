@@ -307,6 +307,10 @@ export const QuickSalePage: React.FC = () => {
 
       await addTable(record);
 
+      // Kitchen ticket reflects everything ordered, so it prints for both
+      // full and partial payments.
+      void printKitchenTicket(basket, orderNumber);
+
       if (fullyPaid) {
         deductStock(basket);
         const payload = {
@@ -320,10 +324,7 @@ export const QuickSalePage: React.FC = () => {
           waiterName: userName,
           orderNumber,
         };
-        const [billRes] = await Promise.all([
-          window.api.printCustomerBill(payload),
-          printKitchenTicket(basket, orderNumber),
-        ]);
+        const billRes = await window.api.printCustomerBill(payload);
         if (billRes.ok) {
           toastSuccess('Ödeme alındı · Fiş yazdırıldı');
         } else {

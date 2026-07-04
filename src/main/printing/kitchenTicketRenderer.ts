@@ -8,7 +8,6 @@ export function renderKitchenTicket(p: ThermalPrinter, r: ReceiptPayload): void 
   p.alignCenter();
   p.setTextQuadArea();
   p.bold(true);
-  p.println(s(`#${r.orderNumber ?? '-'}`));
   p.println(s(`MASA ${r.tableName}`));
   p.bold(false);
   p.setTextNormal();
@@ -66,5 +65,16 @@ export function renderKitchenTicket(p: ThermalPrinter, r: ReceiptPayload): void 
   }
 
   p.drawLine();
+  p.alignCenter();
+  p.setTextQuadArea();
+  p.bold(true);
+  p.println(s(`#${r.orderNumber ?? '-'}`));
+  p.bold(false);
+  p.setTextNormal();
+  p.alignLeft();
+  // Feed several lines so the order number clears the head-to-cutter gap;
+  // otherwise the last printed line sits in the dead zone and gets cut away.
+  p.newLine();
+  p.newLine();
   p.newLine();
 }

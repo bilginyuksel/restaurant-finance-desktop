@@ -95,16 +95,25 @@ function buildPrinterFromConfig(
 }
 
 /**
- * Emit a small prelude that prevents Turkish bytes (0x80–0xFF in PC857) from
- * being interpreted as the first half of a multibyte Kanji character. Many
- * Epson/Star ESC/POS clones power on with Kanji character mode enabled, which
- * causes letters like `Ş` (0x9E in PC857) to render as Japanese glyphs.
+ * Emit a small prelude that (1) resets the printer to a known state and
+ * (2) prevents Turkish bytes (0x80–0xFF in PC857) from being interpreted as
+ * the first half of a multibyte Kanji character. Many Epson/Star ESC/POS
+ * clones power on with Kanji character mode enabled, which causes letters like
+ * `Ş` (0x9E in PC857) to render as Japanese glyphs.
  *
- *   FS .  (0x1C 0x2E) — Cancel Kanji character mode
- *   ESC t 13 (0x1B 0x74 0x0D) — Re-select PC857 (Turkish) just in case
+ *   ESC @    (0x1B 0x40) — Initialize printer. Clears any leftover state and,
+ *            crucially, acts as sacrificial "wake-up" bytes: printers idle/asleep
+ *            after the previous job's cut frequently drop the first bytes they
+ *            receive while the head/motor spins up. Because the order number is
+ *            the very first thing printed on a kitchen ticket, without this it
+ *            would intermittently go missing (notably on macOS via `lp -o raw`).
+ *            Must come first — ESC @ resets the character set, so charset
+ *            selection has to follow it.
+ *   FS .     (0x1C 0x2E) — Cancel Kanji character mode
+ *   ESC t 13 (0x1B 0x74 0x0D) — Re-select PC857 (Turkish)
  */
 function emitTurkishPrelude(printer: ThermalPrinter): void {
-  printer.raw(Buffer.from([0x1c, 0x2e, 0x1b, 0x74, 0x0d]));
+  printer.raw(Buffer.from([0x1b, 0x40, 0x1c, 0x2e, 0x1b, 0x74, 0x0d]));
 }
 
 export const PrinterService = {

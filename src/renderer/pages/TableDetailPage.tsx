@@ -708,6 +708,10 @@ export const TableDetailPage: React.FC<{ tableId?: string; onClose?: () => void 
       currency: CURRENCY,
       items: buildLineItems(allItems),
       total: tableTotalFromOrders(table, recipes),
+      amountPaid: (table.transactions ?? []).reduce(
+        (s, t) => s + (t.grossAmount ?? t.amount ?? 0),
+        0,
+      ),
       waiterName: user?.displayName || user?.email || undefined,
       orderNumber: (table.orders ?? []).map(o => o.orderNumber).filter(Boolean)[0],
     };

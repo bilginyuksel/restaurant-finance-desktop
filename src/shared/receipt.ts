@@ -21,6 +21,8 @@ export interface ReceiptPayload {
   waiterName?: string;
   orderNote?: string;
   orderNumber?: string;
+  /** Amount already settled toward this bill (partial / pre-payments). */
+  amountPaid?: number;
 }
 
 export type PrinterTarget = 'customer' | 'kitchen';

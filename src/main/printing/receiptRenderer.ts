@@ -7,20 +7,27 @@ const money = (n: number, currency: string) => formatMoney(n, currency);
 const s = sanitizeForPrinter;
 
 export function renderCustomerBill(p: ThermalPrinter, r: ReceiptPayload): void {
+  // Leading feed doubles as sacrificial data: a printer waking from the
+  // previous job's cut frequently drops the first line it prints while the
+  // head/motor spins up, which was intermittently swallowing the "HobiPark"
+  // header on repeated prints. Feeding a blank line first ensures the styled
+  // header always makes it onto the paper.
+  p.newLine();
+
   p.alignCenter();
   p.setTextDoubleHeight();
   p.bold(true);
   p.println(s(r.restaurantName ?? 'HobiPark'));
-  p.bold(false);
   p.setTextNormal();
   p.println(s(`MASA ${r.tableName}`));
+  p.bold(false);
 
   p.drawLine();
 
   p.alignLeft();
-  p.println(s(`Sipariş No: ${r.orderNumber ?? '-'}`));
-  p.println(s(`Masa  : ${r.tableName}`));
-  p.println(s(`Tarih : ${r.timestamp}`));
+  p.println(s(`Fis No : ${r.orderNumber ?? '-'}`));
+  p.println(s(`Tarih  : ${r.timestamp}`));
+  if (r.waiterName) p.println(s(`Garson : ${r.waiterName}`));
   p.drawLine();
 
   p.tableCustom([
@@ -52,12 +59,35 @@ export function renderCustomerBill(p: ThermalPrinter, r: ReceiptPayload): void {
   }
 
   p.drawLine();
-  p.alignRight();
-  p.setTextDoubleWidth();
-  p.bold(true);
-  p.println(`TOPLAM: ${money(r.total, r.currency)}`);
-  p.bold(false);
-  p.setTextNormal();
+
+  const paid = r.amountPaid ?? 0;
+  if (paid > 0) {
+    // Show the running total and what has already been settled, then the
+    // remaining balance the customer actually owes.
+    const remaining = Math.max(0, r.total - paid);
+    p.tableCustom([
+      { text: s('Ara Toplam'), align: 'LEFT', width: 0.5 },
+      { text: money(r.total, r.currency), align: 'RIGHT', width: 0.5 },
+    ]);
+    p.tableCustom([
+      { text: s('Odenen'), align: 'LEFT', width: 0.5 },
+      { text: money(paid, r.currency), align: 'RIGHT', width: 0.5 },
+    ]);
+    p.drawLine();
+    p.alignRight();
+    p.setTextDoubleWidth();
+    p.bold(true);
+    p.println(s(`KALAN: ${money(remaining, r.currency)}`));
+    p.bold(false);
+    p.setTextNormal();
+  } else {
+    p.alignRight();
+    p.setTextDoubleWidth();
+    p.bold(true);
+    p.println(s(`TOPLAM: ${money(r.total, r.currency)}`));
+    p.bold(false);
+    p.setTextNormal();
+  }
 
   p.alignCenter();
   p.newLine();
